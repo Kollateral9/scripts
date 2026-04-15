@@ -5,17 +5,20 @@
 #  Usage examples:
 #    ./setup-git-ssh.sh                                     # Interactive: asks for the host
 #    ./setup-git-ssh.sh --host github.com                   # GitHub
+#    ./setup-git-ssh.sh --config-only                       # Skips SSH, configures ONLY Git identity
 #    ./setup-git-ssh.sh --remove-all                        # Deletes all SSH keys from the system
 # =============================================================
 
 GIT_HOST=""
 REMOVE_ALL=false
+CONFIG_ONLY=false
 
 # ── Parse Arguments ───────────────────────────────────────────
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --host|-h) GIT_HOST="$2"; shift ;;
         --remove-all|-R) REMOVE_ALL=true ;;
+        --config-only|-C) CONFIG_ONLY=true ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
@@ -134,7 +137,7 @@ if [ "$REMOVE_ALL" = true ]; then
         log "Deleting key files..."
         count=0
         for pub in "$SSH_DIR"/*.pub; do
-            [ -e "$pub" ] || continue # Skip if no matching files
+            [ -e "$pub" ] || continue
             priv="${pub%.pub}"
             
             rm -f "$pub"
@@ -156,6 +159,152 @@ if [ "$REMOVE_ALL" = true ]; then
         exit 0
     fi
 fi
+
+# ── Function: configure git user (Global or Folder specific) ──
+setup_git_config() {
+    local email=$1
+    local username=$2
+    local safename=$3
+
+    if ! command -v git &> /dev/null; then
+        warn "git not found in PATH. Skipping git config."
+        return
+    fi
+
+    blank
+    info "Git Identity Configuration"
+    info "You can set this identity Globally (for the whole PC)"
+    info "or tie it to a Specific Folder (e.g. ~/Projects/Work/)"
+    read -p "  Enter the folder path (leave empty for Global): " workspace
+
+    if [ -z "$workspace" ]; then
+        # Standard Global Configuration
+        git config --global user.name "$username"
+        git config --global user.email "$email"
+        log "Git configured GLOBALLY: \"$username\" <$email>"
+    else
+        # Folder-based Configuration (IncludeIf)
+        
+        # Expand tilde (~) to full home directory path if used
+        workspace="${workspace/#\~/$HOME}"
+
+        if [ ! -d "$workspace" ]; then
+            warn "Folder '$workspace' does not exist. Creating it..."
+            mkdir -p "$workspace"
+        fi
+
+        # Git requires a trailing slash for directories in includeIf
+        local git_path="$workspace"
+        [[ "${git_path}" != */ ]] && git_path="${git_path}/"
+
+        # Remove trailing slash for path construction
+        local stripped_workspace="${workspace%/}"
+        
+        local specific_config_name=".gitconfig-$safename"
+        local specific_config_path="$stripped_workspace/$specific_config_name"
+
+        cat <<EOF > "$specific_config_path"
+[user]
+    name = $username
+    email = $email
+EOF
+        log "Specific config file created: $specific_config_path"
+
+        # Register the rule in the global .gitconfig
+        git config --global "includeIf.gitdir:${git_path}.path" "$specific_config_path"
+        log "'includeIf' rule activated for folder: $workspace"
+    fi
+}
+
+# ── CONFIG ONLY LOGIC ─────────────────────────────────────────
+if [ "$CONFIG_ONLY" = true ]; then
+    blank
+    info "Git Identity Configuration Mode (Skipping SSH Setup)"
+    read -p "  Enter your email: " email
+    if [ -z "$email" ]; then err "Email not provided. Exiting."; fi
+
+    read -p "  Enter your Git username: " gitUsername
+    if [ -z "$gitUsername" ]; then err "Username not provided. Exiting."; fi
+
+    read -p "  Profile name (e.g. work, personal) [default: custom]: " profileName
+    profileName=${profileName:-custom}
+
+    setup_git_config "$email" "$gitUsername" "$profileName"
+    
+    blank
+    rule
+    echo -e "  ${GREEN}Identity setup completed. Exiting.${NC}"
+    rule
+    blank
+    exit 0
+fi
+
+# ── Function: show key, copy, wait for confirmation ───────────
+show_key_and_wait() {
+    local target_pub_path=$1
+    local pubKey=$(cat "$target_pub_path")
+
+    blank
+    rule
+    echo -e "  ${YELLOW}Add this key to ${PROVIDER}:${NC}"
+    echo -e "  ${YELLOW}$KEYS_URL${NC}"
+    rule
+    blank
+    echo "$pubKey"
+    blank
+    rule
+
+    copy_to_clipboard "$pubKey"
+
+    blank
+    read -p "  Press ENTER after adding the key to ${PROVIDER}..."
+}
+
+# ── Function: test connection ─────────────────────────────────
+test_ssh_connection() {
+    log "Testing connection to $GIT_HOST..."
+    local result
+    result=$(ssh -T "${TEST_USER}@${GIT_HOST}" -o StrictHostKeyChecking=accept-new 2>&1)
+    
+    if echo "$result" | grep -iq "$WELCOME_PAT"; then
+        log "Connection to $GIT_HOST successful!"
+        return 0
+    else
+        warn "Connection completed but non-standard response. Output:"
+        echo -e "    $result"
+        warn "Test manually: ssh -T ${TEST_USER}@${GIT_HOST}"
+        return 1
+    fi
+}
+
+# ── Function: update ~/.ssh/config ────────────────────────────
+update_ssh_config() {
+    local key_file_path=$1
+    local config_path="$SSH_DIR/config"
+    
+    if [ -f "$config_path" ]; then
+        if grep -q "Host $GIT_HOST" "$config_path"; then
+            warn "Host block '$GIT_HOST' already exists in ~/.ssh/config. Skipping."
+            return
+        fi
+    fi
+
+    cat <<EOF >> "$config_path"
+
+Host $GIT_HOST
+    HostName $GIT_HOST
+    User $TEST_USER
+    IdentityFile $key_file_path
+    IdentitiesOnly yes
+    AddKeysToAgent yes
+EOF
+    chmod 600 "$config_path"
+    log "Host block added to ~/.ssh/config."
+}
+
+# =============================================================
+#  MAIN LOGIC
+# =============================================================
 
 # ── 1. Check existing keys BEFORE asking for host ─────────────
 shopt -s nullglob
@@ -238,100 +387,6 @@ else
     PUB_PATH="$SELECTED_PUB_PATH"
 fi
 
-# ── Function: show key, copy, wait for confirmation ───────────
-show_key_and_wait() {
-    local target_pub_path=$1
-    local pubKey=$(cat "$target_pub_path")
-
-    blank
-    rule
-    echo -e "  ${YELLOW}Add this key to ${PROVIDER}:${NC}"
-    echo -e "  ${YELLOW}$KEYS_URL${NC}"
-    rule
-    blank
-    echo "$pubKey"
-    blank
-    rule
-
-    copy_to_clipboard "$pubKey"
-
-    blank
-    read -p "  Press ENTER after adding the key to ${PROVIDER}..."
-}
-
-# ── Function: test connection ─────────────────────────────────
-test_ssh_connection() {
-    log "Testing connection to $GIT_HOST..."
-    local result
-    result=$(ssh -T "${TEST_USER}@${GIT_HOST}" -o StrictHostKeyChecking=accept-new 2>&1)
-    
-    if echo "$result" | grep -iq "$WELCOME_PAT"; then
-        log "Connection to $GIT_HOST successful!"
-        return 0
-    else
-        warn "Connection completed but non-standard response. Output:"
-        echo -e "    $result"
-        warn "Test manually: ssh -T ${TEST_USER}@${GIT_HOST}"
-        return 1
-    fi
-}
-
-# ── Function: configure git user ──────────────────────────────
-setup_git_config() {
-    local email=$1
-    local username=$2
-
-    if ! command -v git &> /dev/null; then
-        warn "git not found in PATH. Skipping git config."
-        return
-    fi
-
-    local current_name=$(git config --global user.name 2>/dev/null)
-    local current_email=$(git config --global user.email 2>/dev/null)
-
-    if [ -n "$current_name" ] && [ -n "$current_email" ]; then
-        log "Git is already configured: \"$current_name\" <$current_email>"
-        read -p "  Do you want to overwrite it? [y/N] " overwrite
-        if [[ ! "$overwrite" =~ ^[yY]$ ]]; then
-            log "Git configuration unchanged."
-            return
-        fi
-    fi
-
-    git config --global user.name "$username"
-    git config --global user.email "$email"
-    log "Git configured: \"$username\" <$email>"
-}
-
-# ── Function: update ~/.ssh/config ────────────────────────────
-update_ssh_config() {
-    local key_file_path=$1
-    local config_path="$SSH_DIR/config"
-    
-    if [ -f "$config_path" ]; then
-        if grep -q "Host $GIT_HOST" "$config_path"; then
-            warn "Host block '$GIT_HOST' already exists in ~/.ssh/config. Skipping."
-            return
-        fi
-    fi
-
-    cat <<EOF >> "$config_path"
-
-Host $GIT_HOST
-    HostName $GIT_HOST
-    User $TEST_USER
-    IdentityFile $key_file_path
-    IdentitiesOnly yes
-    AddKeysToAgent yes
-EOF
-    chmod 600 "$config_path"
-    log "Host block added to ~/.ssh/config."
-}
-
-# =============================================================
-#  MAIN LOGIC
-# =============================================================
-
 if [ "$GENERATE_NEW" = true ]; then
 
     # ── A. Generate new key ───────────────────────────────────
@@ -355,8 +410,7 @@ if [ "$GENERATE_NEW" = true ]; then
     show_key_and_wait "$PUB_PATH"
     test_ssh_connection
     
-    blank
-    setup_git_config "$email" "$gitUsername"
+    setup_git_config "$email" "$gitUsername" "$SAFE_NAME"
 
 else
 
@@ -382,7 +436,7 @@ else
     read -p "  Email [$defaultEmail]: " gitEmail
     gitEmail=${gitEmail:-$defaultEmail}
     
-    setup_git_config "$gitEmail" "$gitUsername"
+    setup_git_config "$gitEmail" "$gitUsername" "$SAFE_NAME"
 fi
 
 blank

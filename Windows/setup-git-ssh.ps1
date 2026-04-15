@@ -4,6 +4,7 @@
 #  Usage examples:
 #    .\setup-git-ssh.ps1                                      # Interactive: asks for the host
 #    .\setup-git-ssh.ps1 -Host github.com                     # GitHub
+#    .\setup-git-ssh.ps1 -ConfigOnly                          # Skips SSH, configures ONLY Git identity (folder/global)
 #    .\setup-git-ssh.ps1 -RemoveAll                           # Deletes all SSH keys from the system
 # =============================================================
 
@@ -11,7 +12,8 @@ param(
     [Alias("Host")]
     [string]$GitHost = "",
 
-    [switch]$RemoveAll
+    [switch]$RemoveAll,
+    [switch]$ConfigOnly
 )
 
 Set-StrictMode -Off
@@ -98,7 +100,7 @@ function Start-SshAgent {
     }
 }
 
-# ── RemoveAll option ──────────────────────────────────────────
+# ── REMOVE ALL LOGIC ──────────────────────────────────────────
 if ($RemoveAll) {
     blank
     warn "WARNING: You are about to delete ALL SSH keys in $SshDir!"
@@ -141,6 +143,152 @@ if ($RemoveAll) {
         exit 0
     }
 }
+
+# ── Function: show key, copy, wait for confirmation ───────────
+function Show-KeyAndWait {
+    param([string]$TargetPubKeyPath)
+
+    $pubKey = (Get-Content $TargetPubKeyPath -Raw).Trim()
+
+    blank
+    rule
+    Write-Host "  Add this key to ${Provider}:" -ForegroundColor Yellow
+    Write-Host "  $KeysUrl" -ForegroundColor Yellow
+    rule
+    blank
+    Write-Host $pubKey -ForegroundColor White
+    blank
+    rule
+
+    try {
+        $pubKey | Set-Clipboard
+        log "Key copied to clipboard."
+    } catch {
+        warn "Failed to copy to clipboard. Please copy the text above manually."
+    }
+
+    blank
+    Read-Host "  Press ENTER after adding the key to ${Provider}..."
+}
+
+# ── Function: test connection ─────────────────────────────────
+function Test-SshConnection {
+    log "Testing connection to $GitHost..."
+    $result = & ssh -T "${TestUser}@${GitHost}" -o StrictHostKeyChecking=accept-new 2>&1
+    if ($result -match $WelcomePat) {
+        log "Connection to $GitHost successful!"
+        return $true
+    } else {
+        warn "Connection completed but non-standard response. Output:"
+        Write-Host "    $result" -ForegroundColor DarkGray
+        warn "Test manually: ssh -T ${TestUser}@${GitHost}"
+        return $false
+    }
+}
+
+# ── Function: configure git user (Global or Folder specific) ──
+function Setup-GitConfig {
+    param([string]$Email, [string]$Username, [string]$SafeName)
+
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        warn "git non found in PATH. Skipping git config."
+        return
+    }
+
+    blank
+    info "Git Identity Configuration"
+    info "You can set this identity Globally (for the whole PC)"
+    info "or tie it to a Specific Folder (e.g. C:\Projects\Work\)"
+    $Workspace = Read-Host "  Enter the folder path (leave empty for Global)"
+
+    if (-not $Workspace) {
+        # Standard Global Configuration
+        git config --global user.name  $Username
+        git config --global user.email $Email
+        log "Git configured GLOBALLY: `"$Username`" <$Email>"
+    } else {
+        # Folder-based Configuration (IncludeIf)
+        if (-not (Test-Path $Workspace)) {
+            warn "Folder '$Workspace' does not exist. Creating it..."
+            New-Item -ItemType Directory -Path $Workspace -Force | Out-Null
+        }
+
+        # Git requires forward slashes (/) and a trailing slash for directories
+        $GitPath = $Workspace -replace "\\", "/"
+        if (-not $GitPath.EndsWith("/")) { $GitPath += "/" }
+
+        # Create the specific config file
+        $SpecificConfigName = ".gitconfig-$SafeName"
+        $SpecificConfigPath = Join-Path $Workspace $SpecificConfigName
+        $GitSpecificPath = $SpecificConfigPath -replace "\\", "/"
+
+        $block = @"
+[user]
+    name = $Username
+    email = $Email
+"@
+        Set-Content -Path $SpecificConfigPath -Value $block
+        log "Specific config file created: $SpecificConfigPath"
+
+        # Register the rule in the global .gitconfig
+        git config --global "includeIf.gitdir:${GitPath}.path" "`"$GitSpecificPath`""
+        log "'includeIf' rule activated for folder: $Workspace"
+    }
+}
+
+# ── Function: update ~/.ssh/config ────────────────────────────
+function Update-SshConfig {
+    param([string]$KeyFilePath)
+
+    $ConfigPath = Join-Path $SshDir "config"
+    $block = @"
+
+Host $GitHost
+    HostName $GitHost
+    User $TestUser
+    IdentityFile $KeyFilePath
+    IdentitiesOnly yes
+    AddKeysToAgent yes
+"@
+
+    if (Test-Path $ConfigPath) {
+        $existing = Get-Content $ConfigPath -Raw
+        if ($existing -match [regex]::Escape("Host $GitHost")) {
+            warn "Host block '$GitHost' already exists in ~/.ssh/config. Skipping."
+            return
+        }
+    }
+
+    Add-Content -Path $ConfigPath -Value $block
+    log "Host block added to ~/.ssh/config."
+}
+
+# ── CONFIG ONLY LOGIC ─────────────────────────────────────────
+if ($ConfigOnly) {
+    blank
+    info "Git Identity Configuration Mode (Skipping SSH Setup)"
+    $email = Read-Host "  Enter your email"
+    if (-not $email) { err "Email not provided. Exiting." }
+
+    $gitUsername = Read-Host "  Enter your Git username"
+    if (-not $gitUsername) { err "Username not provided. Exiting." }
+
+    $profileName = Read-Host "  Profile name (e.g. work, personal) [default: custom]"
+    if (-not $profileName) { $profileName = "custom" }
+
+    Setup-GitConfig -Email $email -Username $gitUsername -SafeName $profileName
+    
+    blank
+    rule
+    Write-Host "  Identity setup completed. Exiting." -ForegroundColor Green
+    rule
+    blank
+    exit 0
+}
+
+# =============================================================
+#  MAIN LOGIC
+# =============================================================
 
 # ── 1. Check existing keys BEFORE asking for host ─────────────
 $existingKeys = @(Get-ChildItem -Path $SshDir -Filter "*.pub" -ErrorAction SilentlyContinue)
@@ -223,105 +371,6 @@ if ($GenerateNew) {
     $PubPath = $SelectedPubPath
 }
 
-# ── Function: show key, copy, wait for confirmation ───────────
-function Show-KeyAndWait {
-    param([string]$TargetPubKeyPath)
-
-    $pubKey = (Get-Content $TargetPubKeyPath -Raw).Trim()
-
-    blank
-    rule
-    Write-Host "  Add this key to ${Provider}:" -ForegroundColor Yellow
-    Write-Host "  $KeysUrl" -ForegroundColor Yellow
-    rule
-    blank
-    Write-Host $pubKey -ForegroundColor White
-    blank
-    rule
-
-    try {
-        $pubKey | Set-Clipboard
-        log "Key copied to clipboard."
-    } catch {
-        warn "Failed to copy to clipboard. Please copy the text above manually."
-    }
-
-    blank
-    Read-Host "  Press ENTER after adding the key to ${Provider}..."
-}
-
-# ── Function: test connection ─────────────────────────────────
-function Test-SshConnection {
-    log "Testing connection to $GitHost..."
-    $result = & ssh -T "${TestUser}@${GitHost}" -o StrictHostKeyChecking=accept-new 2>&1
-    if ($result -match $WelcomePat) {
-        log "Connection to $GitHost successful!"
-        return $true
-    } else {
-        warn "Connection completed but non-standard response. Output:"
-        Write-Host "    $result" -ForegroundColor DarkGray
-        warn "Test manually: ssh -T ${TestUser}@${GitHost}"
-        return $false
-    }
-}
-
-# ── Function: configure git user ──────────────────────────────
-function Setup-GitConfig {
-    param([string]$Email, [string]$Username)
-
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        warn "git not found in PATH. Skipping git config."
-        return
-    }
-
-    $currentName  = git config --global user.name  2>$null
-    $currentEmail = git config --global user.email 2>$null
-
-    if ($currentName -and $currentEmail) {
-        log "Git is already configured: `"$currentName`" <$currentEmail>"
-        $overwrite = Read-Host "  Do you want to overwrite it? [y/N]"
-        if ($overwrite -notmatch "^[yY]$") {
-            log "Git configuration unchanged."
-            return
-        }
-    }
-
-    git config --global user.name  $Username
-    git config --global user.email $Email
-    log "Git configured: `"$Username`" <$Email>"
-}
-
-# ── Function: update ~/.ssh/config ────────────────────────────
-function Update-SshConfig {
-    param([string]$KeyFilePath)
-
-    $ConfigPath = Join-Path $SshDir "config"
-    $block = @"
-
-Host $GitHost
-    HostName $GitHost
-    User $TestUser
-    IdentityFile $KeyFilePath
-    IdentitiesOnly yes
-    AddKeysToAgent yes
-"@
-
-    if (Test-Path $ConfigPath) {
-        $existing = Get-Content $ConfigPath -Raw
-        if ($existing -match [regex]::Escape("Host $GitHost")) {
-            warn "Host block '$GitHost' already exists in ~/.ssh/config. Skipping."
-            return
-        }
-    }
-
-    Add-Content -Path $ConfigPath -Value $block
-    log "Host block added to ~/.ssh/config."
-}
-
-# =============================================================
-#  MAIN LOGIC
-# =============================================================
-
 if ($GenerateNew) {
 
     # ── A. Generate new key ───────────────────────────────────
@@ -345,8 +394,7 @@ if ($GenerateNew) {
     Show-KeyAndWait  -TargetPubKeyPath $PubPath
     Test-SshConnection | Out-Null
     
-    blank
-    Setup-GitConfig -Email $email -Username $gitUsername
+    Setup-GitConfig -Email $email -Username $gitUsername -SafeName $SafeName
 
 } else {
 
@@ -370,7 +418,7 @@ if ($GenerateNew) {
     $gitEmail = Read-Host "  Email [$defaultEmail]"
     if (-not $gitEmail) { $gitEmail = $defaultEmail }
     
-    Setup-GitConfig -Email $gitEmail -Username $gitUsername
+    Setup-GitConfig -Email $gitEmail -Username $gitUsername -SafeName $SafeName
 }
 
 blank
