@@ -1,130 +1,392 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# =============================================================
+#  setup-git-ssh.sh -- Universal SSH key setup for Git hosts
+#
+#  Usage examples:
+#    ./setup-git-ssh.sh                                     # Interactive: asks for the host
+#    ./setup-git-ssh.sh --host github.com                   # GitHub
+#    ./setup-git-ssh.sh --remove-all                        # Deletes all SSH keys from the system
+# =============================================================
 
-# ─────────────────────────────────────────────
-#  setup_ssh.sh — SSH key setup for GitHub
-# ─────────────────────────────────────────────
+GIT_HOST=""
+REMOVE_ALL=false
 
-set -e
+# ── Parse Arguments ───────────────────────────────────────────
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --host|-h) GIT_HOST="$2"; shift ;;
+        --remove-all|-R) REMOVE_ALL=true ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
 
+# ── Colors & Helpers ──────────────────────────────────────────
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 RED='\033[0;31m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-log()    { echo -e "${GREEN}[✔]${NC} $1"; }
-warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
-error()  { echo -e "${RED}[✘]${NC} $1"; exit 1; }
+log()   { echo -e " ${GREEN}[OK]${NC} $1"; }
+warn()  { echo -e " ${YELLOW}[!]${NC} $1"; }
+info()  { echo -e " ${CYAN}[i]${NC} $1"; }
+err()   { echo -e " ${RED}[X]${NC} $1"; exit 1; }
+rule()  { echo -e "${NC}================================================================="; }
+blank() { echo ""; }
 
-# ── Mostra chiave, copia negli appunti, verifica GitHub ───────────────────────
-show_key_and_verify() {
-    local key_pub="$1"
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  Se non l'hai ancora fatto, aggiungi questa chiave a GitHub:${NC}"
-    echo -e "${YELLOW}  GitHub → Settings → SSH and GPG keys → New SSH key${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    cat "$key_pub"
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+# ── Detect provider from hostname ─────────────────────────────
+get_git_provider() {
+    local host=$1
+    if [[ "$host" =~ "github.com" ]]; then echo "GitHub";
+    elif [[ "$host" =~ "bitbucket.org" ]]; then echo "Bitbucket";
+    elif [[ "$host" =~ "gitlab." ]]; then echo "GitLab";
+    else echo "Git"; fi
+}
 
-    if command -v xclip &>/dev/null; then
-        cat "$key_pub" | xclip -selection clipboard
-        log "Chiave copiata negli appunti con xclip."
-    elif command -v xsel &>/dev/null; then
-        cat "$key_pub" | xsel --clipboard --input
-        log "Chiave copiata negli appunti con xsel."
+get_ssh_keys_url() {
+    local host=$1
+    local provider=$2
+    case "$provider" in
+        "GitHub")    echo "https://$host/settings/keys" ;;
+        "Bitbucket") echo "https://$host/account/settings/ssh-keys/" ;;
+        "GitLab")    echo "https://$host/-/user_settings/ssh_keys" ;;
+        *)           echo "https://$host" ;;
+    esac
+}
+
+get_test_user() {
+    local provider=$1
+    if [[ "$provider" == "Bitbucket" ]]; then echo "bitbucket"; else echo "git"; fi
+}
+
+get_welcome_pattern() {
+    local provider=$1
+    case "$provider" in
+        "GitHub")    echo "successfully authenticated" ;;
+        "Bitbucket") echo "logged in as" ;;
+        "GitLab")    echo "Welcome to GitLab" ;;
+        *)           echo "." ;; # any output = connected
+    esac
+}
+
+# ── Banner ────────────────────────────────────────────────────
+clear
+blank
+echo -e "  ${CYAN}Universal Git SSH Setup${NC}"
+echo -e "  ${NC}Bash Edition${NC}"
+rule
+blank
+
+# ── Check prerequisites ───────────────────────────────────────
+if ! command -v ssh-keygen &> /dev/null; then
+    err "ssh-keygen not found. Please install openssh-client (e.g., sudo apt install openssh-client)."
+fi
+log "OpenSSH found."
+
+# ── Ensure .ssh directory exists ──────────────────────────────
+SSH_DIR="$HOME/.ssh"
+if [ ! -d "$SSH_DIR" ]; then
+    mkdir -p "$SSH_DIR"
+    chmod 700 "$SSH_DIR"
+fi
+
+# ── Function: start ssh-agent ─────────────────────────────────
+start_ssh_agent() {
+    if [ -z "$SSH_AUTH_SOCK" ] ; then
+        eval "$(ssh-agent -s)" > /dev/null
+        log "ssh-agent started."
     else
-        warn "xclip/xsel non trovati — copia la chiave manualmente dal testo sopra."
-    fi
-
-    echo ""
-    read -rp "Premi INVIO dopo aver aggiunto la chiave su GitHub..."
-
-    log "Verifica connessione a GitHub..."
-    if ssh -T git@github.com -o StrictHostKeyChecking=no 2>&1 | grep -q "successfully authenticated"; then
-        log "Connessione a GitHub riuscita! Tutto pronto."
-    else
-        warn "Verifica completata, ma GitHub ha restituito un messaggio non standard."
-        warn "Esegui manualmente: ssh -T git@github.com"
+        log "ssh-agent is already running."
     fi
 }
 
-# ── Configura git user.name e user.email ──────────────────────────────────────
+# ── Function: copy to clipboard ───────────────────────────────
+copy_to_clipboard() {
+    local text="$1"
+    if command -v wl-copy &> /dev/null; then
+        echo "$text" | wl-copy
+        log "Key copied to clipboard (Wayland)!"
+    elif command -v xclip &> /dev/null; then
+        echo -n "$text" | xclip -selection clipboard
+        log "Key copied to clipboard (X11)!"
+    elif command -v pbcopy &> /dev/null; then
+        echo "$text" | pbcopy
+        log "Key copied to clipboard (macOS)!"
+    else
+        warn "Clipboard tool (xclip/wl-copy) not found. Please copy the text above manually."
+    fi
+}
+
+# ── REMOVE ALL LOGIC ──────────────────────────────────────────
+if [ "$REMOVE_ALL" = true ]; then
+    blank
+    warn "WARNING: You are about to delete ALL SSH keys in $SSH_DIR!"
+    warn "This action cannot be undone and will break existing SSH connections."
+    read -p "  Are you absolutely sure? [y/N] " confirm
+    
+    if [[ "$confirm" =~ ^[yY]$ ]]; then
+        blank
+        log "Clearing keys from ssh-agent..."
+        start_ssh_agent
+        ssh-add -D 2>/dev/null
+
+        log "Deleting key files..."
+        count=0
+        for pub in "$SSH_DIR"/*.pub; do
+            [ -e "$pub" ] || continue # Skip if no matching files
+            priv="${pub%.pub}"
+            
+            rm -f "$pub"
+            [ -f "$priv" ] && rm -f "$priv"
+            
+            ((count++))
+        done
+
+        log "Successfully deleted $count key pair(s)."
+        blank
+        rule
+        echo -e "  ${GREEN}Cleanup completed. Exiting.${NC}"
+        rule
+        blank
+        exit 0
+    else
+        blank
+        log "Operation cancelled. No keys were deleted. Exiting."
+        exit 0
+    fi
+fi
+
+# ── 1. Check existing keys BEFORE asking for host ─────────────
+shopt -s nullglob
+existing_keys=("$SSH_DIR"/*.pub)
+shopt -u nullglob
+
+GENERATE_NEW=true
+SELECTED_PUB_PATH=""
+SELECTED_KEY_PATH=""
+
+if [ ${#existing_keys[@]} -gt 0 ]; then
+    blank
+    info "Existing SSH keys found in ~/.ssh/:"
+    for i in "${!existing_keys[@]}"; index=$((i+1))
+    do
+        filename=$(basename "${existing_keys[$i]}")
+        echo -e "  [${index}] ${filename}"
+    done
+    echo -e "  ${GREEN}[0] Create a NEW key${NC}"
+    blank
+
+    read -p "  Select an option [0-${#existing_keys[@]}]: " choice
+    
+    if [[ "$choice" =~ ^[1-9][0-9]*$ ]] && [ "$choice" -le "${#existing_keys[@]}" ]; then
+        GENERATE_NEW=false
+        SELECTED_PUB_PATH="${existing_keys[$((choice-1))]}"
+        SELECTED_KEY_PATH="${SELECTED_PUB_PATH%.pub}"
+        
+        log "Selected existing key: $(basename "$SELECTED_PUB_PATH")"
+        
+        pubKeyContent=$(cat "$SELECTED_PUB_PATH")
+        blank
+        rule
+        echo -e "  ${YELLOW}Key Content:${NC}"
+        rule
+        echo "$pubKeyContent"
+        rule
+        
+        copy_to_clipboard "$pubKeyContent"
+        blank
+        
+        read -p "  Do you want to proceed and configure a Git Host with this key? [Y/n] " continue_setup
+        if [[ "$continue_setup" =~ ^[nN]$ ]]; then
+            log "Exiting as requested."
+            exit 0
+        fi
+    elif [ "$choice" == "0" ]; then
+        log "Will create a new SSH key."
+    else
+        err "Invalid selection. Exiting."
+    fi
+fi
+
+# ── 2. Prompt for host if not passed as parameter ─────────────
+if [ -z "$GIT_HOST" ]; then
+    blank
+    info "Examples: github.com  |  gitlab.com  |  gitlab.eggtronic.it  |  bitbucket.org"
+    read -p "  Enter the Git host: " GIT_HOST
+    if [ -z "$GIT_HOST" ]; then err "Host not provided. Exiting."; fi
+fi
+
+PROVIDER=$(get_git_provider "$GIT_HOST")
+KEYS_URL=$(get_ssh_keys_url "$GIT_HOST" "$PROVIDER")
+TEST_USER=$(get_test_user "$PROVIDER")
+WELCOME_PAT=$(get_welcome_pattern "$PROVIDER")
+
+blank
+log "Host:     $GIT_HOST"
+log "Provider: $PROVIDER"
+rule
+
+# ── Setup Variables ───────────────────────────────────────────
+SAFE_NAME="${GIT_HOST//[^a-zA-Z0-9]/_}" # e.g., gitlab_eggtronic_it
+
+if [ "$GENERATE_NEW" = true ]; then
+    KEY_PATH="$SSH_DIR/id_ed25519_$SAFE_NAME"
+    PUB_PATH="$KEY_PATH.pub"
+else
+    KEY_PATH="$SELECTED_KEY_PATH"
+    PUB_PATH="$SELECTED_PUB_PATH"
+fi
+
+# ── Function: show key, copy, wait for confirmation ───────────
+show_key_and_wait() {
+    local target_pub_path=$1
+    local pubKey=$(cat "$target_pub_path")
+
+    blank
+    rule
+    echo -e "  ${YELLOW}Add this key to ${PROVIDER}:${NC}"
+    echo -e "  ${YELLOW}$KEYS_URL${NC}"
+    rule
+    blank
+    echo "$pubKey"
+    blank
+    rule
+
+    copy_to_clipboard "$pubKey"
+
+    blank
+    read -p "  Press ENTER after adding the key to ${PROVIDER}..."
+}
+
+# ── Function: test connection ─────────────────────────────────
+test_ssh_connection() {
+    log "Testing connection to $GIT_HOST..."
+    local result
+    result=$(ssh -T "${TEST_USER}@${GIT_HOST}" -o StrictHostKeyChecking=accept-new 2>&1)
+    
+    if echo "$result" | grep -iq "$WELCOME_PAT"; then
+        log "Connection to $GIT_HOST successful!"
+        return 0
+    else
+        warn "Connection completed but non-standard response. Output:"
+        echo -e "    $result"
+        warn "Test manually: ssh -T ${TEST_USER}@${GIT_HOST}"
+        return 1
+    fi
+}
+
+# ── Function: configure git user ──────────────────────────────
 setup_git_config() {
-    local email="$1"
-    local username="$2"
+    local email=$1
+    local username=$2
 
-    CURRENT_NAME=$(git config --global user.name 2>/dev/null || true)
-    CURRENT_EMAIL=$(git config --global user.email 2>/dev/null || true)
+    if ! command -v git &> /dev/null; then
+        warn "git not found in PATH. Skipping git config."
+        return
+    fi
 
-    if [ -n "$CURRENT_NAME" ] && [ -n "$CURRENT_EMAIL" ]; then
-        log "Configurazione Git già presente: \"$CURRENT_NAME\" <$CURRENT_EMAIL>"
-        read -rp "Vuoi sovrascriverla? [s/N] " OVERWRITE
-        if [[ ! "$OVERWRITE" =~ ^[sS]$ ]]; then
-            log "Configurazione Git invariata."
+    local current_name=$(git config --global user.name 2>/dev/null)
+    local current_email=$(git config --global user.email 2>/dev/null)
+
+    if [ -n "$current_name" ] && [ -n "$current_email" ]; then
+        log "Git is already configured: \"$current_name\" <$current_email>"
+        read -p "  Do you want to overwrite it? [y/N] " overwrite
+        if [[ ! "$overwrite" =~ ^[yY]$ ]]; then
+            log "Git configuration unchanged."
             return
         fi
     fi
 
     git config --global user.name "$username"
     git config --global user.email "$email"
-    log "Git configurato: \"$username\" <$email>"
+    log "Git configured: \"$username\" <$email>"
 }
 
-# ── 1. Controlla se esiste già una chiave SSH ──────────────────────────────────
-EXISTING_KEY=$(find ~/.ssh -maxdepth 1 -name "*.pub" 2>/dev/null | head -n 1)
-
-if [ -n "$EXISTING_KEY" ]; then
-    log "Chiave SSH già presente: $EXISTING_KEY"
-    warn "Verifica se è già registrata su GitHub..."
-
-    if ssh -T git@github.com -o StrictHostKeyChecking=no 2>&1 | grep -q "successfully authenticated"; then
-        log "Chiave già registrata su GitHub. Tutto ok."
-    else
-        warn "La chiave NON risulta registrata su GitHub (o la connessione è fallita)."
-        show_key_and_verify "$EXISTING_KEY"
+# ── Function: update ~/.ssh/config ────────────────────────────
+update_ssh_config() {
+    local key_file_path=$1
+    local config_path="$SSH_DIR/config"
+    
+    if [ -f "$config_path" ]; then
+        if grep -q "Host $GIT_HOST" "$config_path"; then
+            warn "Host block '$GIT_HOST' already exists in ~/.ssh/config. Skipping."
+            return
+        fi
     fi
 
-    # Configura git anche se la chiave era già presente
-    echo ""
-    read -rp "Inserisci il tuo nome utente GitHub (per git config): " GIT_USERNAME
-    EXISTING_EMAIL=$(ssh-keygen -lf "$EXISTING_KEY" 2>/dev/null | awk '{print $3}')
-    read -rp "Inserisci la tua email GitHub [$EXISTING_EMAIL]: " GIT_EMAIL
-    GIT_EMAIL="${GIT_EMAIL:-$EXISTING_EMAIL}"
-    setup_git_config "$GIT_EMAIL" "$GIT_USERNAME"
-    exit 0
+    cat <<EOF >> "$config_path"
+
+Host $GIT_HOST
+    HostName $GIT_HOST
+    User $TEST_USER
+    IdentityFile $key_file_path
+    IdentitiesOnly yes
+    AddKeysToAgent yes
+EOF
+    chmod 600 "$config_path"
+    log "Host block added to ~/.ssh/config."
+}
+
+# =============================================================
+#  MAIN LOGIC
+# =============================================================
+
+if [ "$GENERATE_NEW" = true ]; then
+
+    # ── A. Generate new key ───────────────────────────────────
+    blank
+    read -p "  Enter your email: " email
+    if [ -z "$email" ]; then err "Email not provided. Exiting."; fi
+
+    read -p "  Enter your Git username (name shown on Git commits): " gitUsername
+    if [ -z "$gitUsername" ]; then err "Username not provided. Exiting."; fi
+
+    blank
+    log "Generating key: $KEY_PATH"
+    ssh-keygen -t ed25519 -C "$email" -f "$KEY_PATH" -N ""
+    if [ $? -ne 0 ]; then err "Key generation failed."; fi
+
+    start_ssh_agent
+    ssh-add "$KEY_PATH"
+    if [ $? -eq 0 ]; then log "Key added to the agent."; fi
+
+    update_ssh_config "$KEY_PATH"
+    show_key_and_wait "$PUB_PATH"
+    test_ssh_connection
+    
+    blank
+    setup_git_config "$email" "$gitUsername"
+
+else
+
+    # ── B. Use existing selected key ──────────────────────────
+    start_ssh_agent
+    ssh-add "$KEY_PATH" 2>/dev/null
+
+    update_ssh_config "$KEY_PATH"
+
+    if ! test_ssh_connection; then
+        # If it fails, maybe it hasn't been added to the Git server yet
+        show_key_and_wait "$PUB_PATH"
+        test_ssh_connection
+    fi
+
+    blank
+    read -p "  Git username for $PROVIDER (for git config): " gitUsername
+    
+    # Try to extract comment/email from the public key
+    keyComment=$(awk '{print $3}' "$PUB_PATH" 2>/dev/null)
+    defaultEmail=${keyComment:-""}
+    
+    read -p "  Email [$defaultEmail]: " gitEmail
+    gitEmail=${gitEmail:-$defaultEmail}
+    
+    setup_git_config "$gitEmail" "$gitUsername"
 fi
 
-warn "Nessuna chiave SSH trovata. Avvio configurazione..."
-
-# ── 2. Richiedi email e nome utente ───────────────────────────────────────────
-read -rp "Inserisci la tua email GitHub: " EMAIL
-if [ -z "$EMAIL" ]; then
-    error "Email non fornita. Uscita."
-fi
-
-read -rp "Inserisci il tuo nome utente GitHub: " GIT_USERNAME
-if [ -z "$GIT_USERNAME" ]; then
-    error "Nome utente non fornito. Uscita."
-fi
-
-# ── 3. Genera la chiave ed25519 ────────────────────────────────────────────────
-KEY_PATH="$HOME/.ssh/id_ed25519"
-
-log "Generazione chiave ed25519 in $KEY_PATH..."
-ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEY_PATH" -N ""
-
-# ── 4. Avvia ssh-agent e aggiungi la chiave ────────────────────────────────────
-log "Avvio ssh-agent..."
-eval "$(ssh-agent -s)" > /dev/null
-
-log "Aggiunta chiave all'agente..."
-ssh-add "$KEY_PATH"
-
-# ── 5. Mostra chiave, copia negli appunti, verifica GitHub ────────────────────
-show_key_and_verify "${KEY_PATH}.pub"
-
-# ── 6. Configura git ──────────────────────────────────────────────────────────
-echo ""
-setup_git_config "$EMAIL" "$GIT_USERNAME"
+blank
+rule
+echo -e "  ${GREEN}Setup completed for $GIT_HOST${NC}"
+rule
+blank
