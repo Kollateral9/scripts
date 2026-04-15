@@ -1,11 +1,11 @@
 # =============================================================
 #  setup-git-ssh.ps1 -- Universal SSH key setup for Git hosts
 #
-#  Esempi di utilizzo:
-#    .\setup-git-ssh.ps1                                      # Interattivo: chiede l'host
+#  Usage examples:
+#    .\setup-git-ssh.ps1                                      # Interactive: asks for the host
 #    .\setup-git-ssh.ps1 -Host github.com                     # GitHub
-#    .\setup-git-ssh.ps1 -Host gitlab.com                     # GitLab pubblico
-#    .\setup-git-ssh.ps1 -Host gitlab.eggtronic.it            # GitLab self-hosted
+#    .\setup-git-ssh.ps1 -Host gitlab.com                     # Public GitLab
+#    .\setup-git-ssh.ps1 -Host gitlab.eggtronic.it            # Self-hosted GitLab
 #    .\setup-git-ssh.ps1 -Host bitbucket.org                  # Bitbucket
 # =============================================================
 
@@ -24,13 +24,13 @@ function err   { param($m) Write-Host "  [X] $m" -ForegroundColor Red; exit 1 }
 function rule  { Write-Host ("=" * 65) -ForegroundColor DarkGray }
 function blank { Write-Host "" }
 
-# ── Rileva il provider dal hostname ───────────────────────────
+# ── Detect provider from hostname ─────────────────────────────
 function Get-GitProvider {
     param([string]$hostname)
     if ($hostname -match "github\.com")    { return "GitHub" }
     if ($hostname -match "bitbucket\.org") { return "Bitbucket" }
     if ($hostname -match "gitlab\.")       { return "GitLab" }
-    # Self-hosted generico: proviamo a capire se e' GitLab o Gitea
+    # Generic self-hosted: assuming it's GitLab or Gitea
     return "Git"
 }
 
@@ -58,7 +58,7 @@ function Get-WelcomePattern {
         "GitHub"    { return "successfully authenticated" }
         "Bitbucket" { return "logged in as" }
         "GitLab"    { return "Welcome to GitLab" }
-        default     { return "." }   # qualsiasi output = connesso
+        default     { return "." }   # any output = connected
     }
 }
 
@@ -70,22 +70,80 @@ Write-Host "  PowerShell Edition" -ForegroundColor DarkGray
 rule
 blank
 
-# ── Verifica prerequisiti ─────────────────────────────────────
+# ── Check prerequisites ───────────────────────────────────────
 if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
-    warn "ssh-keygen non trovato. Installo OpenSSH Client..."
+    warn "ssh-keygen not found. Installing OpenSSH Client..."
     Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null
     if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
-        err "Impossibile installare OpenSSH. Vai su Impostazioni > App > Funzionalita' opzionali."
+        err "Failed to install OpenSSH. Go to Settings > Apps > Optional features."
     }
 }
-log "OpenSSH trovato."
+log "OpenSSH found."
 
-# ── Chiedi l'host se non passato da parametro ─────────────────
+# ── Ensure .ssh directory exists ──────────────────────────────
+$SshDir = Join-Path $env:USERPROFILE ".ssh"
+if (-not (Test-Path $SshDir)) {
+    New-Item -ItemType Directory -Path $SshDir -Force | Out-Null
+}
+
+# ── 1. Check existing keys BEFORE asking for host ─────────────
+$existingKeys = @(Get-ChildItem -Path $SshDir -Filter "*.pub" -ErrorAction SilentlyContinue)
+$GenerateNew = $true
+$SelectedPubPath = $null
+$SelectedKeyPath = $null
+
+if ($existingKeys.Count -gt 0) {
+    blank
+    info "Existing SSH keys found in ~/.ssh/:"
+    for ($i = 0; $i -lt $existingKeys.Count; $i++) {
+        Write-Host ("  [{0}] {1}" -f ($i + 1), $existingKeys[$i].Name) -ForegroundColor White
+    }
+    Write-Host "  [0] Create a NEW key" -ForegroundColor Green
+    blank
+
+    $choice = Read-Host "  Select an option [0-$($existingKeys.Count)]"
+    
+    if ($choice -match '^[1-9][0-9]*$' -and [int]$choice -le $existingKeys.Count) {
+        $GenerateNew = $false
+        $SelectedPubPath = $existingKeys[[int]$choice - 1].FullName
+        $SelectedKeyPath = $SelectedPubPath -replace "\.pub$", ""
+        
+        log "Selected existing key: $($existingKeys[[int]$choice - 1].Name)"
+        
+        # Read and copy key
+        $pubKeyContent = (Get-Content $SelectedPubPath -Raw).Trim()
+        blank
+        rule
+        Write-Host "  Key Content:" -ForegroundColor Yellow
+        rule
+        Write-Host $pubKeyContent -ForegroundColor White
+        rule
+        try {
+            $pubKeyContent | Set-Clipboard
+            log "Key copied to clipboard!"
+        } catch {
+            warn "Failed to copy to clipboard. Please copy manually."
+        }
+        blank
+        
+        $continue = Read-Host "  Do you want to proceed and configure a Git Host with this key? [Y/n]"
+        if ($continue -match "^[nN]$") {
+            log "Exiting as requested."
+            exit 0
+        }
+    } elseif ($choice -eq "0") {
+        log "Will create a new SSH key."
+    } else {
+        err "Invalid selection. Exiting."
+    }
+}
+
+# ── 2. Prompt for host if not passed as parameter ─────────────
 if (-not $GitHost) {
     blank
-    info "Esempi: github.com  |  gitlab.com  |  gitlab.eggtronic.it  |  bitbucket.org"
-    $GitHost = Read-Host "  Inserisci il Git host"
-    if (-not $GitHost) { err "Host non fornito. Uscita." }
+    info "Examples: github.com  |  gitlab.com  |  gitlab.eggtronic.it  |  bitbucket.org"
+    $GitHost = Read-Host "  Enter the Git host"
+    if (-not $GitHost) { err "Host not provided. Exiting." }
 }
 
 $Provider   = Get-GitProvider -hostname $GitHost
@@ -98,38 +156,38 @@ log "Host:     $GitHost"
 log "Provider: $Provider"
 rule
 
-# ── Percorsi ──────────────────────────────────────────────────
-$SshDir   = Join-Path $env:USERPROFILE ".ssh"
-$SafeName = $GitHost -replace "[^a-zA-Z0-9]", "_"   # es. gitlab_eggtronic_it
-$KeyName  = "id_ed25519_$SafeName"
-$KeyPath  = Join-Path $SshDir $KeyName
-$PubPath  = "$KeyPath.pub"
+# ── Setup Variables ───────────────────────────────────────────
+$SafeName = $GitHost -replace "[^a-zA-Z0-9]", "_"   # e.g., gitlab_eggtronic_it
 
-if (-not (Test-Path $SshDir)) {
-    New-Item -ItemType Directory -Path $SshDir -Force | Out-Null
+if ($GenerateNew) {
+    $KeyPath = Join-Path $SshDir "id_ed25519_$SafeName"
+    $PubPath = "$KeyPath.pub"
+} else {
+    $KeyPath = $SelectedKeyPath
+    $PubPath = $SelectedPubPath
 }
 
-# ── Funzione: avvia ssh-agent ─────────────────────────────────
+# ── Function: start ssh-agent ─────────────────────────────────
 function Start-SshAgent {
     $svc = Get-Service -Name ssh-agent -ErrorAction SilentlyContinue
     if ($svc) {
         if ($svc.StartType -eq "Disabled") { Set-Service ssh-agent -StartupType Manual }
         if ($svc.Status -ne "Running")     { Start-Service ssh-agent }
-        log "ssh-agent attivo."
+        log "ssh-agent is running."
     } else {
-        warn "Servizio ssh-agent non disponibile (comune su Windows Home)."
+        warn "ssh-agent service not available (common on Windows Home)."
     }
 }
 
-# ── Funzione: mostra chiave, copia, attendi conferma ──────────
+# ── Function: show key, copy, wait for confirmation ───────────
 function Show-KeyAndWait {
-    param([string]$PubKeyPath)
+    param([string]$TargetPubKeyPath)
 
-    $pubKey = (Get-Content $PubKeyPath -Raw).Trim()
+    $pubKey = (Get-Content $TargetPubKeyPath -Raw).Trim()
 
     blank
     rule
-    Write-Host "  Aggiungi questa chiave su ${Provider}:" -ForegroundColor Yellow
+    Write-Host "  Add this key to ${Provider}:" -ForegroundColor Yellow
     Write-Host "  $KeysUrl" -ForegroundColor Yellow
     rule
     blank
@@ -139,36 +197,37 @@ function Show-KeyAndWait {
 
     try {
         $pubKey | Set-Clipboard
-        log "Chiave copiata negli appunti."
+        log "Key copied to clipboard."
     } catch {
-        warn "Impossibile copiare negli appunti. Copia manualmente il testo sopra."
+        warn "Failed to copy to clipboard. Please copy the text above manually."
     }
 
     blank
-    Read-Host "  Premi INVIO dopo aver aggiunto la chiave su ${Provider}..."
+    Read-Host "  Press ENTER after adding the key to ${Provider}..."
 }
 
-# ── Funzione: testa la connessione ────────────────────────────
+# ── Function: test connection ─────────────────────────────────
 function Test-SshConnection {
-    log "Verifica connessione a $GitHost..."
-    $result = & ssh -T "${TestUser}@${Host}" -o StrictHostKeyChecking=accept-new 2>&1
+    log "Testing connection to $GitHost..."
+    # FIX applied here: used $GitHost instead of $Host
+    $result = & ssh -T "${TestUser}@${GitHost}" -o StrictHostKeyChecking=accept-new 2>&1
     if ($result -match $WelcomePat) {
-        log "Connessione a $GitHost riuscita!"
+        log "Connection to $GitHost successful!"
         return $true
     } else {
-        warn "Connessione completata ma risposta non standard. Output:"
+        warn "Connection completed but non-standard response. Output:"
         Write-Host "    $result" -ForegroundColor DarkGray
-        warn "Prova manualmente: ssh -T ${TestUser}@${Host}"
+        warn "Test manually: ssh -T ${TestUser}@${GitHost}"
         return $false
     }
 }
 
-# ── Funzione: configura git user ──────────────────────────────
+# ── Function: configure git user ──────────────────────────────
 function Setup-GitConfig {
     param([string]$Email, [string]$Username)
 
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        warn "git non trovato nel PATH. Salto la configurazione git."
+        warn "git not found in PATH. Skipping git config."
         return
     }
 
@@ -176,20 +235,20 @@ function Setup-GitConfig {
     $currentEmail = git config --global user.email 2>$null
 
     if ($currentName -and $currentEmail) {
-        log "Git gia' configurato: `"$currentName`" <$currentEmail>"
-        $overwrite = Read-Host "  Vuoi sovrascriverla? [s/N]"
-        if ($overwrite -notmatch "^[sS]$") {
-            log "Configurazione Git invariata."
+        log "Git is already configured: `"$currentName`" <$currentEmail>"
+        $overwrite = Read-Host "  Do you want to overwrite it? [y/N]"
+        if ($overwrite -notmatch "^[yY]$") {
+            log "Git configuration unchanged."
             return
         }
     }
 
     git config --global user.name  $Username
     git config --global user.email $Email
-    log "Git configurato: `"$Username`" <$Email>"
+    log "Git configured: `"$Username`" <$Email>"
 }
 
-# ── Funzione: aggiorna ~/.ssh/config ──────────────────────────
+# ── Function: update ~/.ssh/config ────────────────────────────
 function Update-SshConfig {
     param([string]$KeyFilePath)
 
@@ -207,95 +266,72 @@ Host $GitHost
     if (Test-Path $ConfigPath) {
         $existing = Get-Content $ConfigPath -Raw
         if ($existing -match [regex]::Escape("Host $GitHost")) {
-            warn "Blocco Host '$GitHost' gia' presente in ~/.ssh/config. Salto."
+            warn "Host block '$GitHost' already exists in ~/.ssh/config. Skipping."
             return
         }
     }
 
     Add-Content -Path $ConfigPath -Value $block
-    log "Blocco Host aggiunto a ~/.ssh/config."
+    log "Host block added to ~/.ssh/config."
 }
 
 # =============================================================
-#  MAIN
+#  MAIN LOGIC
 # =============================================================
 
-# ── 1. Controlla chiavi esistenti per questo host ─────────────
-blank
-$existingPub = if (Test-Path $PubPath) { $PubPath } else { $null }
+if ($GenerateNew) {
 
-# Cerca anche eventuali altre chiavi .pub nella cartella
-if (-not $existingPub) {
-    $existingPub = Get-ChildItem -Path $SshDir -Filter "*.pub" -ErrorAction SilentlyContinue |
-                   Select-Object -First 1 -ExpandProperty FullName
-    if ($existingPub) {
-        warn "Nessuna chiave specifica per '$GitHost' trovata."
-        warn "Chiave esistente: $existingPub"
-        $use = Read-Host "  Usare questa chiave esistente invece di crearne una nuova? [s/N]"
-        if ($use -notmatch "^[sS]$") { $existingPub = $null }
-    }
-}
+    # ── A. Generate new key ───────────────────────────────────
+    blank
+    $email = Read-Host "  Enter your email"
+    if (-not $email) { err "Email not provided. Exiting." }
 
-if ($existingPub) {
-    log "Uso chiave: $existingPub"
-    $fp = (& ssh-keygen -lf $existingPub 2>$null) -split " " | Select-Object -Index 1
+    $gitUsername = Read-Host "  Enter your Git username (name shown on Git commits)"
+    if (-not $gitUsername) { err "Username not provided. Exiting." }
+
+    blank
+    log "Generating key: $KeyPath"
+    & ssh-keygen -t ed25519 -C $email -f $KeyPath -N '""'
+    if ($LASTEXITCODE -ne 0) { err "Key generation failed." }
 
     Start-SshAgent
-    & ssh-add ($existingPub -replace "\.pub$", "") 2>$null
+    & ssh-add $KeyPath
+    if ($LASTEXITCODE -eq 0) { log "Key added to the agent." }
 
-    Update-SshConfig -KeyFilePath ($existingPub -replace "\.pub$", "")
+    Update-SshConfig -KeyFilePath $KeyPath
+    Show-KeyAndWait  -TargetPubKeyPath $PubPath
+    Test-SshConnection | Out-Null
+    
+    blank
+    Setup-GitConfig -Email $email -Username $gitUsername
+
+} else {
+
+    # ── B. Use existing selected key ──────────────────────────
+    Start-SshAgent
+    & ssh-add $KeyPath 2>$null
+
+    Update-SshConfig -KeyFilePath $KeyPath
 
     $connected = Test-SshConnection
     if (-not $connected) {
-        Show-KeyAndWait -PubKeyPath $existingPub
+        # If it fails, maybe it hasn't been added to the Git server yet
+        Show-KeyAndWait -TargetPubKeyPath $PubPath
         Test-SshConnection | Out-Null
     }
 
     blank
-    $gitUsername = Read-Host "  Nome utente $Provider (per git config)"
-    $keyComment  = (& ssh-keygen -lf $existingPub 2>$null) -split " " | Select-Object -Index 2
+    $gitUsername = Read-Host "  Git username for $Provider (for git config)"
+    $keyComment  = (& ssh-keygen -lf $PubPath 2>$null) -split " " | Select-Object -Index 2
     $defaultEmail = if ($keyComment) { $keyComment } else { "" }
     $gitEmail = Read-Host "  Email [$defaultEmail]"
     if (-not $gitEmail) { $gitEmail = $defaultEmail }
+    
     Setup-GitConfig -Email $gitEmail -Username $gitUsername
-
-} else {
-
-    # ── 2. Nessuna chiave: chiedi credenziali ─────────────────
-    blank
-    $email = Read-Host "  Inserisci la tua email"
-    if (-not $email) { err "Email non fornita. Uscita." }
-
-    $gitUsername = Read-Host "  Inserisci il tuo nome utente Git (nome che viene mostrato su Git a ogni commit)"
-    if (-not $gitUsername) { err "Nome utente non fornito. Uscita." }
-
-    # ── 3. Genera chiave ed25519 ──────────────────────────────
-    blank
-    log "Generazione chiave: $KeyPath"
-    & ssh-keygen -t ed25519 -C $email -f $KeyPath -N '""'
-    if ($LASTEXITCODE -ne 0) { err "Generazione chiave fallita." }
-
-    # ── 4. Avvia agente e aggiungi chiave ─────────────────────
-    Start-SshAgent
-    & ssh-add $KeyPath
-    if ($LASTEXITCODE -eq 0) { log "Chiave aggiunta all'agente." }
-
-    # ── 5. Aggiorna config ────────────────────────────────────
-    Update-SshConfig -KeyFilePath $KeyPath
-
-    # ── 6. Mostra chiave e attendi registrazione ──────────────
-    Show-KeyAndWait -PubKeyPath $PubPath
-
-    # ── 7. Testa connessione ──────────────────────────────────
-    Test-SshConnection | Out-Null
-
-    # ── 8. Configura git ──────────────────────────────────────
-    blank
-    Setup-GitConfig -Email $email -Username $gitUsername
 }
 
 blank
 rule
-Write-Host "  Setup completato per $GitHost" -ForegroundColor Green
+Write-Host "  Setup completed for $GitHost" -ForegroundColor Green
 rule
 blank
