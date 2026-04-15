@@ -4,14 +4,14 @@
 #  Usage examples:
 #    .\setup-git-ssh.ps1                                      # Interactive: asks for the host
 #    .\setup-git-ssh.ps1 -Host github.com                     # GitHub
-#    .\setup-git-ssh.ps1 -Host gitlab.com                     # Public GitLab
-#    .\setup-git-ssh.ps1 -Host gitlab.eggtronic.it            # Self-hosted GitLab
-#    .\setup-git-ssh.ps1 -Host bitbucket.org                  # Bitbucket
+#    .\setup-git-ssh.ps1 -RemoveAll                           # Deletes all SSH keys from the system
 # =============================================================
 
 param(
     [Alias("Host")]
-    [string]$GitHost = ""
+    [string]$GitHost = "",
+
+    [switch]$RemoveAll
 )
 
 Set-StrictMode -Off
@@ -84,6 +84,62 @@ log "OpenSSH found."
 $SshDir = Join-Path $env:USERPROFILE ".ssh"
 if (-not (Test-Path $SshDir)) {
     New-Item -ItemType Directory -Path $SshDir -Force | Out-Null
+}
+
+# ── Function: start ssh-agent ─────────────────────────────────
+function Start-SshAgent {
+    $svc = Get-Service -Name ssh-agent -ErrorAction SilentlyContinue
+    if ($svc) {
+        if ($svc.StartType -eq "Disabled") { Set-Service ssh-agent -StartupType Manual }
+        if ($svc.Status -ne "Running")     { Start-Service ssh-agent }
+        log "ssh-agent is running."
+    } else {
+        warn "ssh-agent service not available (common on Windows Home)."
+    }
+}
+
+# ── RemoveAll option ──────────────────────────────────────────
+if ($RemoveAll) {
+    blank
+    warn "WARNING: You are about to delete ALL SSH keys in $SshDir!"
+    warn "This action cannot be undone and will break existing SSH connections."
+    $confirm = Read-Host "  Are you absolutely sure? [y/N]"
+    
+    if ($confirm -match "^[yY]$") {
+        blank
+        log "Clearing keys from ssh-agent..."
+        Start-SshAgent
+        & ssh-add -D 2>$null
+
+        log "Deleting key files..."
+        $pubKeys = Get-ChildItem -Path $SshDir -Filter "*.pub" -ErrorAction SilentlyContinue
+        $count = 0
+
+        foreach ($pub in $pubKeys) {
+            $privPath = $pub.FullName -replace "\.pub$", ""
+            
+            # Remove Public Key
+            Remove-Item -Path $pub.FullName -Force -ErrorAction SilentlyContinue
+            
+            # Remove matching Private Key
+            if (Test-Path $privPath) {
+                Remove-Item -Path $privPath -Force -ErrorAction SilentlyContinue
+            }
+            $count++
+        }
+
+        log "Successfully deleted $count key pair(s)."
+        blank
+        rule
+        Write-Host "  Cleanup completed. Exiting." -ForegroundColor Green
+        rule
+        blank
+        exit 0
+    } else {
+        blank
+        log "Operation cancelled. No keys were deleted. Exiting."
+        exit 0
+    }
 }
 
 # ── 1. Check existing keys BEFORE asking for host ─────────────
@@ -167,18 +223,6 @@ if ($GenerateNew) {
     $PubPath = $SelectedPubPath
 }
 
-# ── Function: start ssh-agent ─────────────────────────────────
-function Start-SshAgent {
-    $svc = Get-Service -Name ssh-agent -ErrorAction SilentlyContinue
-    if ($svc) {
-        if ($svc.StartType -eq "Disabled") { Set-Service ssh-agent -StartupType Manual }
-        if ($svc.Status -ne "Running")     { Start-Service ssh-agent }
-        log "ssh-agent is running."
-    } else {
-        warn "ssh-agent service not available (common on Windows Home)."
-    }
-}
-
 # ── Function: show key, copy, wait for confirmation ───────────
 function Show-KeyAndWait {
     param([string]$TargetPubKeyPath)
@@ -209,7 +253,6 @@ function Show-KeyAndWait {
 # ── Function: test connection ─────────────────────────────────
 function Test-SshConnection {
     log "Testing connection to $GitHost..."
-    # FIX applied here: used $GitHost instead of $Host
     $result = & ssh -T "${TestUser}@${GitHost}" -o StrictHostKeyChecking=accept-new 2>&1
     if ($result -match $WelcomePat) {
         log "Connection to $GitHost successful!"
