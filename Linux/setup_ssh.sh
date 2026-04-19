@@ -9,6 +9,8 @@
 #    ./setup-git-ssh.sh --remove-all                        # Deletes all SSH keys from the system
 # =============================================================
 
+set -u
+
 GIT_HOST=""
 REMOVE_ALL=false
 CONFIG_ONLY=false
@@ -96,9 +98,11 @@ fi
 
 # ── Function: start ssh-agent ─────────────────────────────────
 start_ssh_agent() {
-    if [ -z "$SSH_AUTH_SOCK" ] ; then
+    if [ -z "${SSH_AUTH_SOCK:-}" ] ; then
         eval "$(ssh-agent -s)" > /dev/null
         log "ssh-agent started."
+        # Note: the agent started here will keep running after the script exits.
+        # To stop it manually: eval "$(ssh-agent -k)"
     else
         log "ssh-agent is already running."
     fi
@@ -136,8 +140,8 @@ if [ "$REMOVE_ALL" = true ]; then
 
         log "Deleting key files..."
         count=0
+        shopt -s nullglob
         for pub in "$SSH_DIR"/*.pub; do
-            [ -e "$pub" ] || continue
             priv="${pub%.pub}"
             
             rm -f "$pub"
@@ -145,6 +149,7 @@ if [ "$REMOVE_ALL" = true ]; then
             
             ((count++))
         done
+        shopt -u nullglob
 
         log "Successfully deleted $count key pair(s)."
         blank
@@ -187,6 +192,11 @@ setup_git_config() {
         
         # Expand tilde (~) to full home directory path if used
         workspace="${workspace/#\~/$HOME}"
+
+        # Warn about spaces in path (git's includeIf supports it, but it can be fragile)
+        if [[ "$workspace" =~ [[:space:]] ]]; then
+            warn "Path contains spaces. This works but can be fragile with some tools."
+        fi
 
         if [ ! -d "$workspace" ]; then
             warn "Folder '$workspace' does not exist. Creating it..."
@@ -242,7 +252,8 @@ fi
 # ── Function: show key, copy, wait for confirmation ───────────
 show_key_and_wait() {
     local target_pub_path=$1
-    local pubKey=$(cat "$target_pub_path")
+    local pubKey
+    pubKey=$(cat "$target_pub_path")
 
     blank
     rule
@@ -307,8 +318,13 @@ EOF
 # =============================================================
 
 # ── 1. Check existing keys BEFORE asking for host ─────────────
+# Only list .pub files that have a matching private key (skip orphan keys)
+existing_keys=()
 shopt -s nullglob
-existing_keys=("$SSH_DIR"/*.pub)
+for pub in "$SSH_DIR"/*.pub; do
+    priv="${pub%.pub}"
+    [ -f "$priv" ] && existing_keys+=("$pub")
+done
 shopt -u nullglob
 
 GENERATE_NEW=true
@@ -318,8 +334,8 @@ SELECTED_KEY_PATH=""
 if [ ${#existing_keys[@]} -gt 0 ]; then
     blank
     info "Existing SSH keys found in ~/.ssh/:"
-    for i in "${!existing_keys[@]}"; index=$((i+1))
-    do
+    for i in "${!existing_keys[@]}"; do
+        index=$((i+1))
         filename=$(basename "${existing_keys[$i]}")
         echo -e "  [${index}] ${filename}"
     done
@@ -430,7 +446,8 @@ else
     read -p "  Git username for $PROVIDER (for git config): " gitUsername
     
     # Try to extract comment/email from the public key
-    keyComment=$(awk '{print $3}' "$PUB_PATH" 2>/dev/null)
+    # Use cut -f3- to preserve comments that contain spaces (e.g. full names)
+    keyComment=$(cut -d' ' -f3- "$PUB_PATH" 2>/dev/null)
     defaultEmail=${keyComment:-""}
     
     read -p "  Email [$defaultEmail]: " gitEmail
