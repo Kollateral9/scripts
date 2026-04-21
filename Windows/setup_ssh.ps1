@@ -16,7 +16,8 @@ param(
     [switch]$ConfigOnly
 )
 
-Set-StrictMode -Off
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
 # ── Helpers ───────────────────────────────────────────────────
 function log   { param($m) Write-Host " [OK] $m" -ForegroundColor Green }
@@ -28,40 +29,67 @@ function blank { Write-Host "" }
 
 # ── Detect provider from hostname ─────────────────────────────
 function Get-GitProvider {
-    param([string]$hostname)
-    if ($hostname -match "github\.com")    { return "GitHub" }
-    if ($hostname -match "bitbucket\.org") { return "Bitbucket" }
-    if ($hostname -match "gitlab\.")       { return "GitLab" }
+    param([string]$HostName)
+    if ($HostName -match "github\.com")    { return "GitHub" }
+    if ($HostName -match "bitbucket\.org") { return "Bitbucket" }
+    if ($HostName -match "gitlab\.")       { return "GitLab" }
     # Generic self-hosted: assuming it's GitLab or Gitea
     return "Git"
 }
 
 function Get-SshKeysUrl {
-    param([string]$hostname, [string]$provider)
-    switch ($provider) {
-        "GitHub"    { return "https://$hostname/settings/keys" }
-        "Bitbucket" { return "https://$hostname/account/settings/ssh-keys/" }
-        "GitLab"    { return "https://$hostname/-/user_settings/ssh_keys" }
-        default     { return "https://$hostname" }
+    param([string]$HostName, [string]$Provider)
+    switch ($Provider) {
+        "GitHub"    { return "https://$HostName/settings/keys" }
+        "Bitbucket" { return "https://$HostName/account/settings/ssh-keys/" }
+        "GitLab"    { return "https://$HostName/-/user_settings/ssh_keys" }
+        default     { return "https://$HostName" }
     }
 }
 
 function Get-TestUser {
-    param([string]$provider)
-    switch ($provider) {
+    param([string]$Provider)
+    switch ($Provider) {
         "Bitbucket" { return "bitbucket" }
         default     { return "git" }
     }
 }
 
 function Get-WelcomePattern {
-    param([string]$provider)
-    switch ($provider) {
+    param([string]$Provider)
+    switch ($Provider) {
         "GitHub"    { return "successfully authenticated" }
         "Bitbucket" { return "logged in as" }
         "GitLab"    { return "Welcome to GitLab" }
         default     { return "." }   # any output = connected
     }
+}
+
+# ── Helper: lock down ACLs on a file to current user only ─────
+# OpenSSH on Windows refuses to use config/key files that are too
+# permissive. This mirrors the 'chmod 600' behavior from bash.
+function Set-RestrictiveAcl {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return }
+    try {
+        icacls $Path /inheritance:r /grant:r "${env:USERNAME}:(F)" 2>&1 | Out-Null
+    } catch {
+        warn "Could not restrict ACLs on $Path (continuing anyway)."
+    }
+}
+
+# ── Helper: get only valid key pairs (skip orphan .pub files) ──
+function Get-ValidKeyPairs {
+    param([string]$Dir)
+    $pubs = @(Get-ChildItem -Path $Dir -Filter "*.pub" -ErrorAction SilentlyContinue)
+    $valid = @()
+    foreach ($pub in $pubs) {
+        $priv = $pub.FullName -replace "\.pub$", ""
+        if (Test-Path $priv) {
+            $valid += $pub
+        }
+    }
+    return ,$valid   # comma-prefix forces array even for single item
 }
 
 # ── Banner ────────────────────────────────────────────────────
@@ -114,16 +142,13 @@ if ($RemoveAll) {
         & ssh-add -D 2>$null
 
         log "Deleting key files..."
-        $pubKeys = Get-ChildItem -Path $SshDir -Filter "*.pub" -ErrorAction SilentlyContinue
+        # Only delete complete key pairs (skip orphan .pub files)
+        $pairs = Get-ValidKeyPairs -Dir $SshDir
         $count = 0
 
-        foreach ($pub in $pubKeys) {
+        foreach ($pub in $pairs) {
             $privPath = $pub.FullName -replace "\.pub$", ""
-            
-            # Remove Public Key
             Remove-Item -Path $pub.FullName -Force -ErrorAction SilentlyContinue
-            
-            # Remove matching Private Key
             if (Test-Path $privPath) {
                 Remove-Item -Path $privPath -Force -ErrorAction SilentlyContinue
             }
@@ -168,30 +193,36 @@ function Show-KeyAndWait {
     }
 
     blank
-    Read-Host "  Press ENTER after adding the key to ${Provider}..."
+    Read-Host "  Press ENTER after adding the key to ${Provider}..." | Out-Null
 }
 
 # ── Function: test connection ─────────────────────────────────
 function Test-SshConnection {
     log "Testing connection to $GitHost..."
+    # ssh -T sends output to stderr; capture everything and convert to a single string
+    # so that -match evaluates as a proper boolean on the full output.
     $result = & ssh -T "${TestUser}@${GitHost}" -o StrictHostKeyChecking=accept-new 2>&1
-    if ($result -match $WelcomePat) {
+    $resultText = ($result | Out-String)
+
+    if ($resultText -match $WelcomePat) {
         log "Connection to $GitHost successful!"
         return $true
     } else {
         warn "Connection completed but non-standard response. Output:"
-        Write-Host "    $result" -ForegroundColor DarkGray
+        Write-Host "    $resultText" -ForegroundColor DarkGray
         warn "Test manually: ssh -T ${TestUser}@${GitHost}"
         return $false
     }
 }
 
 # ── Function: configure git user (Global or Folder specific) ──
-function Setup-GitConfig {
+# Note: PowerShell convention is Verb-Noun with approved verbs.
+# 'Setup' is not approved; 'Set' is the equivalent.
+function Set-GitConfig {
     param([string]$Email, [string]$Username, [string]$SafeName)
 
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        warn "git non found in PATH. Skipping git config."
+        warn "git not found in PATH. Skipping git config."
         return
     }
 
@@ -208,6 +239,12 @@ function Setup-GitConfig {
         log "Git configured GLOBALLY: `"$Username`" <$Email>"
     } else {
         # Folder-based Configuration (IncludeIf)
+
+        # Warn about spaces in path (git's includeIf supports it, but it can be fragile)
+        if ($Workspace -match '\s') {
+            warn "Path contains spaces. This works but can be fragile with some tools."
+        }
+
         if (-not (Test-Path $Workspace)) {
             warn "Folder '$Workspace' does not exist. Creating it..."
             New-Item -ItemType Directory -Path $Workspace -Force | Out-Null
@@ -260,6 +297,10 @@ Host $GitHost
     }
 
     Add-Content -Path $ConfigPath -Value $block
+
+    # Lock down ACLs: OpenSSH on Windows refuses configs readable by other users
+    Set-RestrictiveAcl -Path $ConfigPath
+
     log "Host block added to ~/.ssh/config."
 }
 
@@ -276,7 +317,7 @@ if ($ConfigOnly) {
     $profileName = Read-Host "  Profile name (e.g. work, personal) [default: custom]"
     if (-not $profileName) { $profileName = "custom" }
 
-    Setup-GitConfig -Email $email -Username $gitUsername -SafeName $profileName
+    Set-GitConfig -Email $email -Username $gitUsername -SafeName $profileName
     
     blank
     rule
@@ -291,10 +332,11 @@ if ($ConfigOnly) {
 # =============================================================
 
 # ── 1. Check existing keys BEFORE asking for host ─────────────
-$existingKeys = @(Get-ChildItem -Path $SshDir -Filter "*.pub" -ErrorAction SilentlyContinue)
+# Only list .pub files that have a matching private key (skip orphan keys)
+$existingKeys = Get-ValidKeyPairs -Dir $SshDir
 $GenerateNew = $true
-$SelectedPubPath = $null
-$SelectedKeyPath = $null
+$SelectedPubPath = ""
+$SelectedKeyPath = ""
 
 if ($existingKeys.Count -gt 0) {
     blank
@@ -350,10 +392,10 @@ if (-not $GitHost) {
     if (-not $GitHost) { err "Host not provided. Exiting." }
 }
 
-$Provider   = Get-GitProvider -hostname $GitHost
-$KeysUrl    = Get-SshKeysUrl  -hostname $GitHost -provider $Provider
-$TestUser   = Get-TestUser    -provider $Provider
-$WelcomePat = Get-WelcomePattern -provider $Provider
+$Provider   = Get-GitProvider    -HostName $GitHost
+$KeysUrl    = Get-SshKeysUrl     -HostName $GitHost -Provider $Provider
+$TestUser   = Get-TestUser       -Provider $Provider
+$WelcomePat = Get-WelcomePattern -Provider $Provider
 
 blank
 log "Host:     $GitHost"
@@ -383,8 +425,13 @@ if ($GenerateNew) {
 
     blank
     log "Generating key: $KeyPath"
-    & ssh-keygen -t ed25519 -C $email -f $KeyPath -N '""'
+    # Use '' (empty PowerShell string) + -q to reliably pass an empty passphrase.
+    # The old '""' form was interpreted inconsistently depending on OpenSSH/PS version.
+    & ssh-keygen -t ed25519 -C $email -f $KeyPath -N '' -q
     if ($LASTEXITCODE -ne 0) { err "Key generation failed." }
+
+    # Lock down ACLs on the newly-created private key
+    Set-RestrictiveAcl -Path $KeyPath
 
     Start-SshAgent
     & ssh-add $KeyPath
@@ -394,7 +441,7 @@ if ($GenerateNew) {
     Show-KeyAndWait  -TargetPubKeyPath $PubPath
     Test-SshConnection | Out-Null
     
-    Setup-GitConfig -Email $email -Username $gitUsername -SafeName $SafeName
+    Set-GitConfig -Email $email -Username $gitUsername -SafeName $SafeName
 
 } else {
 
@@ -413,12 +460,25 @@ if ($GenerateNew) {
 
     blank
     $gitUsername = Read-Host "  Git username for $Provider (for git config)"
-    $keyComment  = (& ssh-keygen -lf $PubPath 2>$null) -split " " | Select-Object -Index 2
-    $defaultEmail = if ($keyComment) { $keyComment } else { "" }
+
+    # Extract the comment from the .pub file directly.
+    # .pub format: "<type> <base64-key> <comment-with-possible-spaces>"
+    # Using -split with max=3 preserves comments that contain spaces (e.g. "Claudio Rossi").
+    $defaultEmail = ""
+    try {
+        $pubContent = (Get-Content $PubPath -Raw).Trim()
+        $parts = $pubContent -split '\s+', 3
+        if ($parts.Count -ge 3) {
+            $defaultEmail = $parts[2]
+        }
+    } catch {
+        # leave defaultEmail empty
+    }
+
     $gitEmail = Read-Host "  Email [$defaultEmail]"
     if (-not $gitEmail) { $gitEmail = $defaultEmail }
     
-    Setup-GitConfig -Email $gitEmail -Username $gitUsername -SafeName $SafeName
+    Set-GitConfig -Email $gitEmail -Username $gitUsername -SafeName $SafeName
 }
 
 blank
