@@ -294,7 +294,12 @@ update_ssh_config() {
     local config_path="$SSH_DIR/config"
     
     if [ -f "$config_path" ]; then
-        if grep -q "Host $GIT_HOST" "$config_path"; then
+        # Match a real "Host <host>" directive (anchored, whole-token) instead of
+        # a loose substring, so e.g. 'github.com' doesn't match 'github.com.evil'
+        # and 'gitlab.com' doesn't falsely match an existing 'gitlab.company.com'.
+        local host_re
+        host_re=$(printf '%s' "$GIT_HOST" | sed 's/[][\.^$*/]/\\&/g')
+        if grep -qiE "^[[:space:]]*Host[[:space:]]+${host_re}([[:space:]]|$)" "$config_path"; then
             warn "Host block '$GIT_HOST' already exists in ~/.ssh/config. Skipping."
             return
         fi

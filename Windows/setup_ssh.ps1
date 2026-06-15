@@ -103,7 +103,13 @@ blank
 # ── Check prerequisites ───────────────────────────────────────
 if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
     warn "ssh-keygen not found. Installing OpenSSH Client..."
-    Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null
+    # Installing a Windows capability needs admin rights; catch the failure and
+    # show a friendly message instead of an unhandled exception / stack trace.
+    try {
+        Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 -ErrorAction Stop | Out-Null
+    } catch {
+        err "Could not install OpenSSH automatically (administrator rights required). Enable it via Settings > Apps > Optional features, then re-run."
+    }
     if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
         err "Failed to install OpenSSH. Go to Settings > Apps > Optional features."
     }
@@ -290,7 +296,11 @@ Host $GitHost
 
     if (Test-Path $ConfigPath) {
         $existing = Get-Content $ConfigPath -Raw
-        if ($existing -match [regex]::Escape("Host $GitHost")) {
+        # Match a real "Host <host>" directive (line-anchored, whole token) rather
+        # than a loose substring, so 'gitlab.com' doesn't falsely match an existing
+        # 'gitlab.company.com' block.
+        $hostPattern = "(?im)^\s*Host\s+$([regex]::Escape($GitHost))(\s|$)"
+        if ($existing -match $hostPattern) {
             warn "Host block '$GitHost' already exists in ~/.ssh/config. Skipping."
             return
         }

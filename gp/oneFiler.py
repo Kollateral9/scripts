@@ -8,6 +8,7 @@ The output will be saved in the current directory as "oneFile_project.txt"."
 """
 
 import os
+import sys
 import datetime
 
 # --- CONFIGURATION ---
@@ -139,6 +140,13 @@ def create_bundle(root_dir):
     print(f"Automatically skipped {skipped_files} binary/unreadable files.")
 
 if __name__ == "__main__":
-    current_directory = os.getcwd()
-    print(f"Starting bundling process in: {current_directory}...")
-    create_bundle(current_directory)
+    # Optional first argument: the project directory to bundle.
+    # Falls back to the current working directory when omitted.
+    target_dir = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.getcwd()
+
+    if not os.path.isdir(target_dir):
+        print(f"Error: '{target_dir}' is not a valid directory.")
+        sys.exit(1)
+
+    print(f"Starting bundling process in: {target_dir}...")
+    create_bundle(target_dir)

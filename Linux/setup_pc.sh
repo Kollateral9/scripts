@@ -184,17 +184,49 @@ REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 [ -z "$REAL_HOME" ] && error "Could not resolve home directory for $REAL_USER."
 REAL_GROUP=$(id -gn "$REAL_USER")
 
+# ── Non-interactive APT ───────────────────────────────────────────────────────
+# Run unattended on a fresh machine: never open dpkg conffile prompts or the
+# needrestart "which services to restart?" dialog, both of which would otherwise
+# hang or abort the script under `set -e`.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 # ── Detect distro ─────────────────────────────────────────────────────────────
 # shellcheck disable=SC1091
 source /etc/os-release
 DISTRO_ID="${ID:-unknown}"
-DISTRO_CODENAME="${VERSION_CODENAME:-unknown}"
+DISTRO_ID_LIKE="${ID_LIKE:-}"
 
-if [[ "$DISTRO_ID" != "ubuntu" && "$DISTRO_ID" != "debian" ]]; then
-    error "Unsupported distro: $DISTRO_ID. This script supports Ubuntu and Debian only."
+# Map the running distro onto its upstream base (ubuntu or debian) so that
+# Ubuntu/Debian derivatives (Linux Mint, Pop!_OS, elementary, Zorin, ...) work
+# too. The APT repos below are keyed on the *base* distro and its codename.
+case " $DISTRO_ID $DISTRO_ID_LIKE " in
+    *" ubuntu "*) BASE_DISTRO="ubuntu" ;;
+    *" debian "*) BASE_DISTRO="debian" ;;
+    *)
+        error "Unsupported distro: $DISTRO_ID. This script supports Ubuntu/Debian and their derivatives only."
+        ;;
+esac
+
+# Pick the codename the upstream repos actually publish for. Derivatives often
+# set VERSION_CODENAME to their *own* codename (e.g. Mint 'vanessa'), which does
+# not exist in the Ubuntu/Debian repos — but they also expose UBUNTU_CODENAME
+# with the real upstream value.
+if [ "$BASE_DISTRO" = "ubuntu" ]; then
+    BASE_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+else
+    BASE_CODENAME="${DEBIAN_CODENAME:-${VERSION_CODENAME:-}}"
 fi
 
-log "Detected distro: $DISTRO_ID ($DISTRO_CODENAME)"
+if [ -z "$BASE_CODENAME" ]; then
+    error "Could not determine the upstream codename for $DISTRO_ID. Aborting to avoid writing a broken APT source."
+fi
+
+if [ "$DISTRO_ID" = "$BASE_DISTRO" ]; then
+    log "Detected distro: $DISTRO_ID ($BASE_CODENAME)"
+else
+    log "Detected distro: $DISTRO_ID (based on $BASE_DISTRO / $BASE_CODENAME)"
+fi
 
 # ── Architecture detection ────────────────────────────────────────────────────
 ARCH=$(dpkg --print-architecture)
@@ -274,7 +306,13 @@ install_apt_repo() {
 
 # ── 1. System update ──────────────────────────────────────────────────────────
 section "System update"
-apt update && apt upgrade -y && apt autoremove -y && apt autoclean
+# Keep existing config files on conflict (--force-confold) instead of prompting,
+# so the upgrade never blocks waiting for input.
+APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+apt update
+apt "${APT_OPTS[@]}" upgrade -y
+apt autoremove -y
+apt autoclean
 log "System updated."
 
 ensure_bashrc_newline "$REAL_HOME/.bashrc"
@@ -349,7 +387,7 @@ else
     warn "eza already installed, skipped."
 fi
 
-if ! grep -q "alias ls=" "$REAL_HOME/.bashrc" 2>/dev/null; then
+if ! grep -q "# eza as ls replacement" "$REAL_HOME/.bashrc" 2>/dev/null; then
     append_bashrc ""
     append_bashrc "# eza as ls replacement"
     append_bashrc "alias ls='eza --icons'"
@@ -526,14 +564,14 @@ fi
 
 # ── 9. Docker ─────────────────────────────────────────────────────────────────
 section "Docker"
-DOCKER_DEB_LINE="deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${DISTRO_ID} ${DISTRO_CODENAME} stable"
+DOCKER_DEB_LINE="deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${BASE_DISTRO} ${BASE_CODENAME} stable"
 
 if ! command -v docker &>/dev/null && ! pkg_installed docker-ce; then
     install -m 0755 -d /etc/apt/keyrings
     repo_changed=1
     install_apt_repo \
         "Docker" \
-        "https://download.docker.com/linux/${DISTRO_ID}/gpg" \
+        "https://download.docker.com/linux/${BASE_DISTRO}/gpg" \
         "/etc/apt/keyrings/docker.gpg" \
         "/etc/apt/sources.list.d/docker.list" \
         "$DOCKER_DEB_LINE" \
@@ -550,7 +588,7 @@ else
         install -m 0755 -d /etc/apt/keyrings
         install_apt_repo \
             "Docker" \
-            "https://download.docker.com/linux/${DISTRO_ID}/gpg" \
+            "https://download.docker.com/linux/${BASE_DISTRO}/gpg" \
             "/etc/apt/keyrings/docker.gpg" \
             "/etc/apt/sources.list.d/docker.list" \
             "$DOCKER_DEB_LINE" \

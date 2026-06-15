@@ -428,6 +428,14 @@ def write_changelog(
     if not final.endswith("\n"):
         final += "\n"
 
+    # Evita riscritture spurie: se l'unica differenza rispetto al file esistente
+    # e' la riga "Last generated", lascia il file (e il suo timestamp) invariato.
+    # Cosi' `git diff` non risulta sporco a ogni esecuzione senza modifiche reali.
+    if changelog_path.exists():
+        old = changelog_path.read_text(encoding="utf-8")
+        if LAST_GENERATED_RE.sub("", old) == LAST_GENERATED_RE.sub("", final):
+            return old
+
     changelog_path.write_text(final, encoding="utf-8")
     return final
 
@@ -484,8 +492,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Sezione [Unreleased]: {len(unreleased)} commit")
         return 0
 
-    write_changelog(changelog_path, missing, unreleased)
-    if missing:
+    before = changelog_path.read_text(encoding="utf-8") if changelog_path.exists() else None
+    after = write_changelog(changelog_path, missing, unreleased)
+
+    if before == after:
+        print("Changelog gia' aggiornato. Nessuna modifica necessaria.")
+    elif missing:
         print(f"CHANGELOG.md aggiornato con {len(missing)} nuova/e release: "
               f"{', '.join(r.version.clean for r in missing)}")
     else:
