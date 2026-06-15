@@ -14,7 +14,7 @@ what is missing.
 | [Linux/setup_pc.sh](Linux/setup_pc.sh) | Ubuntu/Debian + derivatives | Installs a full dev toolchain (CLI tools, Chrome, VSCode, gh, Docker, pyenv, nvm, DB tools) and configures `.bashrc`. |
 | [Linux/setup_ssh.sh](Linux/setup_ssh.sh) | Linux/macOS | Generates an SSH key per Git host, registers it in `~/.ssh/config`, tests the connection, and sets the Git identity (global or per-folder). |
 | [Linux/forceGitName.sh](Linux/forceGitName.sh) | Git Bash / Linux | Rewrites author/committer name & email across the **entire** history of a repo (edit the values inside before use). |
-| [Windows/setup_pc.ps1](Windows/setup_pc.ps1) | Windows | winget-based equivalent of `setup_pc.sh` (+ WSL2/Docker Desktop, PowerShell profile). |
+| [Windows/setup_pc.ps1](Windows/setup_pc.ps1) | Windows | winget-based equivalent of `setup_pc.sh` (+ WSL2/Docker Desktop, smart PowerShell profile with PSReadLine predictions + posh-git). |
 | [Windows/setup_ssh.ps1](Windows/setup_ssh.ps1) | Windows | PowerShell port of `setup_ssh.sh`. |
 | [Windows/WTContextMenu.ps1](Windows/WTContextMenu.ps1) | Windows | Adds an "Open in Windows Terminal Here" right-click entry (HKCU, no admin). |
 | [gp/oneFiler.py](gp/oneFiler.py) | any | Concatenates all text files of a project into a single `oneFile_project.txt` (e.g. to feed an LLM). |

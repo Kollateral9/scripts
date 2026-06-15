@@ -127,6 +127,37 @@ function Update-EnvPath {
     $env:Path = "$machine;$user"
 }
 
+# ── Install a PowerShell Gallery module idempotently (no admin needed) ──
+# Skips the install if the module is already available (optionally at/above a
+# minimum version). Uses -Force to avoid the "untrusted repository" prompt.
+function Install-PSModuleIfMissing {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$MinimumVersion
+    )
+    $available = Get-Module -ListAvailable -Name $Name
+    if ($MinimumVersion -and $available) {
+        $available = $available | Where-Object { $_.Version -ge [version]$MinimumVersion }
+    }
+    if ($available) {
+        warn "${Name}: already available, skipped."
+        return
+    }
+    info "${Name}: installing from PSGallery..."
+    # TLS 1.2 for older hosts (Windows PowerShell 5.1); harmless on PowerShell 7.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = `
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch {}
+    try {
+        Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber `
+            -Repository PSGallery -ErrorAction Stop
+        log "${Name}: installed."
+    } catch {
+        warn "${Name}: install failed ($_). Run manually: Install-Module $Name -Scope CurrentUser"
+    }
+}
+
 # =============================================================
 #  CHECK MODE
 # =============================================================
@@ -176,6 +207,16 @@ if ($Check) {
     section "Shells & terminal"
     Check-Winget "PowerShell 7"       "Microsoft.PowerShell"
     Check-Winget "Windows Terminal"   "Microsoft.WindowsTerminal"
+
+    section "Shell experience"
+    function Check-Module {
+        param([string]$Label, [string]$Name)
+        if (Get-Module -ListAvailable -Name $Name) { log "${Label}: installed" }
+        else { warn "${Label}: not installed" }
+    }
+    Check-Module "PSReadLine"          "PSReadLine"
+    Check-Module "posh-git"            "posh-git"
+    Check-Module "CompletionPredictor" "CompletionPredictor"
 
     section "Utilities"
     Check-Winget "7-Zip"              "7zip.7zip"
@@ -411,7 +452,17 @@ if (-not $SkipWSL) {
     warn "Skipping WSL2 (-SkipWSL)"
 }
 
-# ── 12. PowerShell profile customization ──────────────────────
+# ── 12. Smart shell modules (PSReadLine predictions + git completion) ──
+section "Smart shell (PSReadLine + posh-git)"
+# PSReadLine ships with PowerShell 7; only (re)install if older than 2.2.0,
+# the minimum for plugin-based predictions (the zsh-like autosuggestions).
+Install-PSModuleIfMissing -Name "PSReadLine" -MinimumVersion "2.2.0"
+# posh-git: git-aware tab completion (branch names, remotes, ...) + status prompt.
+Install-PSModuleIfMissing -Name "posh-git"
+# CompletionPredictor: IntelliSense-based predictions feeding PSReadLine.
+Install-PSModuleIfMissing -Name "CompletionPredictor"
+
+# ── 13. PowerShell profile customization ──────────────────────
 section "PowerShell profile (`$PROFILE.CurrentUserAllHosts)"
 Update-EnvPath  # make sure eza/bat/etc. are visible when we test below
 
@@ -435,6 +486,23 @@ function tree { eza --icons --tree @args }
 "@
 }
 
+# Smart shell: zsh-like history/plugin autosuggestions + git-aware tab completion.
+# Guarded so the profile never errors if a module is missing on a given machine.
+Add-ProfileBlock -Label "smart shell (PSReadLine)" -Marker "# Smart shell: PSReadLine" -Block @"
+
+# Smart shell: PSReadLine predictions + git-aware completion
+if (Get-Module -ListAvailable PSReadLine | Where-Object { `$_.Version -ge [version]'2.2.0' }) {
+    Import-Module PSReadLine
+    Set-PSReadLineOption -PredictionSource HistoryAndPlugin -ErrorAction SilentlyContinue
+    Set-PSReadLineOption -PredictionViewStyle ListView      -ErrorAction SilentlyContinue
+}
+Set-PSReadLineKeyHandler -Key Tab       -Function MenuComplete
+Set-PSReadLineKeyHandler -Key UpArrow   -Function HistorySearchBackward
+Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
+if (Get-Module -ListAvailable CompletionPredictor) { Import-Module CompletionPredictor }
+if (Get-Module -ListAvailable posh-git)            { Import-Module posh-git }
+"@
+
 # pyenv-win init: add env vars and PATH if not already present.
 # pyenv-win's installer normally does this, but we guard in case of partial installs.
 if (Test-Path $PyenvDir) {
@@ -450,7 +518,7 @@ if (`$env:Path -notlike "*`$env:PYENV\bin*") {
 "@
 }
 
-# ── 13. Git global config ─────────────────────────────────────
+# ── 14. Git global config ─────────────────────────────────────
 section "Git global config"
 if (Get-Command git -ErrorAction SilentlyContinue) {
     $currentName  = (git config --global user.name  2>$null)
@@ -471,7 +539,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     warn "  git config --global user.email `"you@example.com`""
 }
 
-# ── 14. Summary ───────────────────────────────────────────────
+# ── 15. Summary ───────────────────────────────────────────────
 blank
 rule
 Write-Host "  Setup complete! Summary:" -ForegroundColor Cyan
@@ -487,6 +555,7 @@ Write-Host "  [OK] Python + pyenv-win" -ForegroundColor Green
 Write-Host "  [OK] nvm-windows + Node.js LTS" -ForegroundColor Green
 if (-not $SkipDocker) { Write-Host "  [OK] Docker Desktop" -ForegroundColor Green }
 if (-not $SkipWSL)    { Write-Host "  [OK] WSL2 + Ubuntu" -ForegroundColor Green }
+Write-Host "  [OK] Smart shell: PSReadLine predictions + posh-git" -ForegroundColor Green
 Write-Host "  [OK] PowerShell profile aliases" -ForegroundColor Green
 blank
 Write-Host "  [!] Action items:" -ForegroundColor Yellow
