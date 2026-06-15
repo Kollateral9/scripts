@@ -2,49 +2,49 @@
 """
 strip_repo.py
 ~~~~~~~~~~~~~
-Pulisce un repository SoC rimuovendo file sensibili / pesanti / inutili
-prima di condividerlo, preservando tutto ciò che serve per analizzare
-il build system (CMake, Bazel, script, sorgenti C, header, ecc.).
+Cleans up a SoC repository by removing sensitive / heavy / useless files
+before sharing it, while preserving everything needed to analyze the
+build system (CMake, Bazel, scripts, C sources, headers, etc.).
 
-Modalità di operazione:
-  - DEFAULT: copia sicura. Ricrea il folder tree accanto all'originale,
-    copiando solo i file da tenere. L'originale non viene mai toccato.
-  - --in-place: opera direttamente sull'originale (comportamento vecchio).
-  - --output-dir PATH: specifica una directory di output diversa
-    (default: <root>_stripped/ accanto alla root).
+Operating modes:
+  - DEFAULT: safe copy. Recreates the folder tree next to the original,
+    copying only the files to keep. The original is never touched.
+  - --in-place: operates directly on the original (old behavior).
+  - --output-dir PATH: specifies a different output directory
+    (default: <root>_stripped/ next to the root).
 
-Categorie di pulizia (tutte attive di default):
+Cleanup categories (all active by default):
   hdl          Verilog, SystemVerilog, VHDL
-  constraints  Constraint FPGA / timing (.xdc, .sdc, .tcl di sintesi)
-  linker       Linker script (.ld, .lds)
-  config       File di configurazione (.cfg, .ini)
-  docs         Documentazione interna (.doc, .docx, .pdf, .pptx, .xlsx)
-  netlist      Netlist e artefatti di sintesi (.edf, .edif, .dcp, .bit, .ncd, ...)
-  venv         Ambienti virtuali Python (venv, .venv, env, .env, ...)
-  build_junk   Artefatti di compilazione (.o, .a, .elf, .hex, .vcd, .fsdb, ...)
+  constraints  FPGA / timing constraints (.xdc, .sdc, synthesis .tcl)
+  linker       Linker scripts (.ld, .lds)
+  config       Configuration files (.cfg, .ini)
+  docs         Internal documentation (.doc, .docx, .pdf, .pptx, .xlsx)
+  netlist      Netlists and synthesis artifacts (.edf, .edif, .dcp, .bit, .ncd, ...)
+  venv         Python virtual environments (venv, .venv, env, .env, ...)
+  build_junk   Build artifacts (.o, .a, .elf, .hex, .vcd, .fsdb, ...)
 
-Uso:
-    python3 strip_repo.py /percorso/alla/repo                          # copia sicura
-    python3 strip_repo.py /percorso/alla/repo --output-dir /tmp/out    # output esplicito
-    python3 strip_repo.py /percorso/alla/repo --in-place               # modifica in-place
-    python3 strip_repo.py /percorso/alla/repo --only hdl netlist       # solo alcune categorie
-    python3 strip_repo.py /percorso/alla/repo --skip docs              # tutte tranne docs
-    python3 strip_repo.py /percorso/alla/repo --dry-run                # anteprima
+Usage:
+    python3 strip_repo.py /path/to/repo                          # safe copy
+    python3 strip_repo.py /path/to/repo --output-dir /tmp/out    # explicit output
+    python3 strip_repo.py /path/to/repo --in-place               # modify in-place
+    python3 strip_repo.py /path/to/repo --only hdl netlist       # only some categories
+    python3 strip_repo.py /path/to/repo --skip docs              # all but docs
+    python3 strip_repo.py /path/to/repo --dry-run                # preview
 
-Opzioni:
-    --dry-run                  Mostra cosa verrebbe eliminato/copiato senza toccare nulla
-    --yes / -y                 Salta la conferma interattiva
-    --in-place                 Opera sull'originale (pericoloso — chiede conferma extra)
-    --output-dir PATH          Directory di destinazione per la copia (default: <root>_stripped)
-    --include-submodules       Includi i file dei submoduli Git nella copia (default: escludi)
-    --only CAT [...]           Attiva solo le categorie elencate
-    --skip CAT [...]           Disattiva le categorie elencate
-    --extra-ext EXT            Aggiunge estensioni extra da rimuovere (ripetibile)
-    --size-warn-threshold MB   Soglia in MB per i warning sui file grandi (default: 5)
-    --out-report F             Salva il log completo (size scan + dettaglio file) in un file .log
-                               (default: <root>_strip.log se non specificato con questo flag)
-    --verbose                  Stampa a schermo anche la lista dettagliata file per file
-    --keep-empty-dirs          Non rimuovere le cartelle vuote (solo --in-place)
+Options:
+    --dry-run                  Show what would be deleted/copied without touching anything
+    --yes / -y                 Skip the interactive confirmation
+    --in-place                 Operate on the original (dangerous — asks for extra confirmation)
+    --output-dir PATH          Destination directory for the copy (default: <root>_stripped)
+    --include-submodules       Include Git submodule files in the copy (default: exclude)
+    --only CAT [...]           Activate only the listed categories
+    --skip CAT [...]           Deactivate the listed categories
+    --extra-ext EXT            Add extra extensions to remove (repeatable)
+    --size-warn-threshold MB   Threshold in MB for large-file warnings (default: 5)
+    --out-report F             Save the full log (size scan + per-file detail) to a .log file
+                               (default: <root>_strip.log if not given with this flag)
+    --verbose                  Also print the detailed file-by-file list to screen
+    --keep-empty-dirs          Do not remove empty directories (only --in-place)
 """
 
 import argparse
@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Optional
 
 # ─────────────────────────────────────────────────────────────
-#  CATEGORIE
+#  CATEGORIES
 # ─────────────────────────────────────────────────────────────
 
 CATEGORIES: dict[str, dict] = {
@@ -71,9 +71,9 @@ CATEGORIES: dict[str, dict] = {
         },
     },
     "constraints": {
-        "label": "Constraint FPGA / timing",
+        "label": "FPGA / timing constraints",
         "extensions": {".xdc", ".sdc", ".ucf", ".pcf", ".lpf"},
-        # .tcl è ambiguo — cercato per pattern, non per estensione
+        # .tcl is ambiguous — matched by pattern, not by extension
         "filename_patterns": [
             re.compile(r".*synth.*\.tcl$", re.IGNORECASE),
             re.compile(r".*impl.*\.tcl$", re.IGNORECASE),
@@ -83,19 +83,19 @@ CATEGORIES: dict[str, dict] = {
         ],
     },
     "linker": {
-        "label": "Linker script",
+        "label": "Linker scripts",
         "extensions": {".ld", ".lds"},
     },
     "config": {
-        "label": "File di configurazione",
+        "label": "Configuration files",
         "extensions": {".cfg", ".ini"},
     },
     "docs": {
-        "label": "Documentazione interna",
+        "label": "Internal documentation",
         "extensions": {".doc", ".docx", ".pdf", ".pptx", ".xlsx", ".odt", ".odp"},
     },
     "netlist": {
-        "label": "Netlist / sintesi / bitstream",
+        "label": "Netlist / synthesis / bitstream",
         "extensions": {
             ".edf", ".edif", ".ngc", ".ncd",
             ".dcp", ".xpr",
@@ -104,12 +104,12 @@ CATEGORIES: dict[str, dict] = {
         },
     },
     "venv": {
-        "label": "Ambienti virtuali Python",
+        "label": "Python virtual environments",
         "extensions": set(),
         "directory_markers": True,
     },
     "build_junk": {
-        "label": "Artefatti di compilazione / simulazione",
+        "label": "Build / simulation artifacts",
         "extensions": {
             ".o", ".obj", ".a", ".lib", ".so", ".dll", ".dylib",
             ".elf", ".hex", ".srec", ".map",
@@ -120,11 +120,11 @@ CATEGORIES: dict[str, dict] = {
     },
 }
 
-# Nomi/marker di venv Python
+# Python venv names / markers
 VENV_MARKERS = {"pyvenv.cfg"}
 VENV_DIR_NAMES = {"venv", ".venv", "env", ".env", "virtualenv", ".virtualenv"}
 
-# Directory sempre ignorate durante la scansione
+# Directories always ignored during the scan
 SKIP_DIRS = {
     ".git",
     "__pycache__",
@@ -138,31 +138,31 @@ SKIP_DIRS = {
     "analog_ip",
 }
 
-# Estensioni "note sicure" che non generano warning di dimensione
-# (testo/codice che può essere legittimamente grande)
+# "Known safe" extensions that do not trigger size warnings
+# (text/code that can legitimately be large)
 KNOWN_TEXT_EXTENSIONS = {
     ".c", ".cpp", ".h", ".hpp", ".py", ".rs", ".go", ".java",
     ".cmake", ".bzl", ".bazel", ".mk", ".sh", ".bash", ".zsh",
     ".json", ".yaml", ".yml", ".toml", ".xml", ".hjson",
     ".md", ".rst", ".txt", ".adoc",
     ".tcl", ".do",
-    # HDL (se attivi li eliminiamo, ma non sono "binary sconosciuti")
+    # HDL (if active we delete them, but they are not "unknown binaries")
     ".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl",
 }
 
-# Estensioni binarie note che però vengono già gestite dalle categorie
-# → se sono nella delete-list non serve avvertire
-KNOWN_BINARY_MANAGED = set()  # popolato a runtime dalle categorie attive
+# Known binary extensions that are already handled by the categories
+# → if they are in the delete-list there is no need to warn
+KNOWN_BINARY_MANAGED = set()  # populated at runtime from the active categories
 
 
 # ─────────────────────────────────────────────────────────────
-#  SUBMODULI GIT
+#  GIT SUBMODULES
 # ─────────────────────────────────────────────────────────────
 
 def parse_gitmodules(root: Path) -> list[Path]:
     """
-    Legge .gitmodules e restituisce i percorsi relativi dei submoduli.
-    Restituisce lista vuota se il file non esiste o non è parsabile.
+    Reads .gitmodules and returns the relative paths of the submodules.
+    Returns an empty list if the file does not exist or cannot be parsed.
     """
     gitmodules = root / ".gitmodules"
     if not gitmodules.exists():
@@ -183,8 +183,8 @@ def parse_gitmodules(root: Path) -> list[Path]:
 
 def get_submodule_dirs(root: Path) -> tuple[set[Path], set[Path]]:
     """
-    Ritorna (popolati, vuoti) dove ogni set contiene Path assoluti.
-    Un submodulo è "popolato" se la sua directory esiste e non è vuota.
+    Returns (populated, empty) where each set contains absolute Paths.
+    A submodule is "populated" if its directory exists and is not empty.
     """
     populated: set[Path] = set()
     empty: set[Path] = set()
@@ -193,7 +193,7 @@ def get_submodule_dirs(root: Path) -> tuple[set[Path], set[Path]]:
         abs_path = root / rel
         if not abs_path.is_dir():
             continue
-        # Controlla se è davvero popolato (ha almeno un file/dir oltre a .git)
+        # Check whether it is actually populated (has at least one file/dir besides .git)
         try:
             contents = [c for c in abs_path.iterdir() if c.name != ".git"]
             if contents:
@@ -207,17 +207,17 @@ def get_submodule_dirs(root: Path) -> tuple[set[Path], set[Path]]:
 
 
 # ─────────────────────────────────────────────────────────────
-#  STRUTTURA DATI SCAN
+#  SCAN DATA STRUCTURES
 # ─────────────────────────────────────────────────────────────
 
 @dataclass
 class FileRecord:
     path: Path
-    size: int                    # byte
-    category: Optional[str]      # categoria di eliminazione, None = da tenere
+    size: int                    # bytes
+    category: Optional[str]      # deletion category, None = keep
     is_venv: bool = False
-    warn_large_kept: bool = False      # file grande che teniamo
-    warn_large_unknown: bool = False   # file grande con tipo ignoto
+    warn_large_kept: bool = False      # large file we keep
+    warn_large_unknown: bool = False   # large file of unknown type
 
 
 @dataclass
@@ -242,7 +242,7 @@ class ScanResult:
 
 
 # ─────────────────────────────────────────────────────────────
-#  SCANSIONE
+#  SCAN
 # ─────────────────────────────────────────────────────────────
 
 def is_venv_dir(d: Path) -> bool:
@@ -262,7 +262,7 @@ def _classify_file(
     filename_patterns: list,
     size_warn_bytes: int,
 ) -> FileRecord:
-    """Classifica un singolo file e costruisce il suo FileRecord."""
+    """Classifies a single file and builds its FileRecord."""
     try:
         size = fpath.stat().st_size
     except OSError:
@@ -271,7 +271,7 @@ def _classify_file(
     suffix = Path(fname).suffix.lower()
     category: Optional[str] = None
 
-    # Determina categoria di eliminazione
+    # Determine the deletion category
     for cat_name in active_categories:
         if cat_name == "venv":
             continue
@@ -285,18 +285,18 @@ def _classify_file(
             category = cat_name
             break
 
-    # Warning dimensione
+    # Size warning
     warn_large_kept = False
     warn_large_unknown = False
 
     if size >= size_warn_bytes:
         if category is not None:
-            # File grande ma viene eliminato → nessun warning
+            # Large file but it gets deleted → no warning
             pass
         else:
-            # File che teniamo — è grande?
+            # File we keep — is it large?
             if suffix not in KNOWN_TEXT_EXTENSIONS:
-                # Estensione binaria o sconosciuta
+                # Binary or unknown extension
                 warn_large_unknown = True
             else:
                 warn_large_kept = True
@@ -317,13 +317,13 @@ def scan(
     size_warn_bytes: int,
     include_submodules: bool,
 ) -> ScanResult:
-    """Scansione completa della repo."""
+    """Full scan of the repo."""
     result = ScanResult(root=root)
 
-    # Submoduli
+    # Submodules
     result.submodule_dirs_populated, result.submodule_dirs_empty = get_submodule_dirs(root)
 
-    # Estensioni attive
+    # Active extensions
     all_extensions = extra_extensions.copy()
     filename_patterns = []
 
@@ -339,25 +339,25 @@ def scan(
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         d = Path(dirpath)
 
-        # Salta directory protette
+        # Skip protected directories
         dirnames[:] = [dn for dn in dirnames if dn not in SKIP_DIRS]
 
-        # Gestione submoduli
+        # Submodule handling
         if not include_submodules:
             new_dirnames = []
             for dn in dirnames:
                 child = d / dn
                 if child in result.submodule_dirs_populated or child in result.submodule_dirs_empty:
-                    # Submodulo: salta
+                    # Submodule: skip
                     pass
                 else:
                     new_dirnames.append(dn)
             dirnames[:] = new_dirnames
         else:
-            # Includi submoduli ma salta i loro .git interni
+            # Include submodules but skip their internal .git
             dirnames[:] = [dn for dn in dirnames if dn != ".git" or d == root]
 
-        # Controlla se è un venv
+        # Check whether it is a venv
         if check_venv and d != root and is_venv_dir(d):
             result.venv_dirs.append(d)
             dirnames.clear()
@@ -372,7 +372,7 @@ def scan(
             )
             result.all_records.append(rec)
 
-    # Ordinamento per dimensione decrescente (per il report)
+    # Sort by decreasing size (for the report)
     result.all_records.sort(key=lambda r: r.size, reverse=True)
     result.venv_dirs.sort()
     return result
@@ -406,23 +406,23 @@ def dir_total_size(d: Path) -> int:
 
 def _status_label(rec: FileRecord) -> str:
     if rec.category is not None:
-        return f"ELIMINO  ({rec.category})"
+        return f"DELETE   ({rec.category})"
     if rec.warn_large_unknown:
-        return "TENGO    ⚠  tipo sconosciuto"
+        return "KEEP     ⚠  unknown type"
     if rec.warn_large_kept:
-        return "TENGO    ⚠  file grande"
-    return "TENGO"
+        return "KEEP     ⚠  large file"
+    return "KEEP"
 
 
 def _build_size_report_lines(result: ScanResult) -> list[str]:
-    """Costruisce le righe del size report (senza stamparle)."""
-    SEP = "\u2500" * 100
+    """Builds the lines of the size report (without printing them)."""
+    SEP = "─" * 100
     lines = [
         "",
         SEP,
-        "  SCANSIONE DIMENSIONI \u2014 tutti i file ordinati dal pi\u00f9 grande al pi\u00f9 piccolo",
+        "  SIZE SCAN — all files ordered from largest to smallest",
         SEP,
-        f"  {'DIMENSIONE':>10}  {'STATO':<35}  PERCORSO",
+        f"  {'SIZE':>10}  {'STATUS':<35}  PATH",
         SEP,
     ]
     for rec in result.all_records:
@@ -432,34 +432,34 @@ def _build_size_report_lines(result: ScanResult) -> list[str]:
     for d in result.venv_dirs:
         sz = dir_total_size(d)
         rel = d.relative_to(result.root)
-        lines.append(f"  {human_size(sz):>10}  {'ELIMINO  (venv)':<35}  {rel}/")
+        lines.append(f"  {human_size(sz):>10}  {'DELETE   (venv)':<35}  {rel}/")
     for d in sorted(result.submodule_dirs_populated):
         sz = dir_total_size(d)
         rel = d.relative_to(result.root)
-        lines.append(f"  {human_size(sz):>10}  {'ESCLUSO  (submodulo)':<35}  {rel}/")
+        lines.append(f"  {human_size(sz):>10}  {'EXCLUDED (submodule)':<35}  {rel}/")
     for d in sorted(result.submodule_dirs_empty):
         rel = d.relative_to(result.root)
-        lines.append(f"  {'0 B':>10}  {'ESCLUSO  (submodulo vuoto)':<35}  {rel}/")
+        lines.append(f"  {'0 B':>10}  {'EXCLUDED (empty submodule)':<35}  {rel}/")
     lines.append(SEP)
     return lines
 
 
 def print_size_report(result: ScanResult, verbose: bool):
     """
-    Con --verbose stampa la lista completa a schermo.
-    Senza flag stampa solo i WARNING (se presenti).
-    Il log completo viene sempre scritto su file da save_log().
+    With --verbose prints the full list to screen.
+    Without the flag prints only the WARNINGs (if any).
+    The full log is always written to file by save_log().
     """
     if verbose:
         for line in _build_size_report_lines(result):
             print(line)
         print()
     else:
-        warn_lines = [l for l in _build_size_report_lines(result) if "\u26a0" in l]
+        warn_lines = [l for l in _build_size_report_lines(result) if "⚠" in l]
         if warn_lines:
-            SEP = "\u2500" * 100
+            SEP = "─" * 100
             print(f"\n{SEP}")
-            print("  DIMENSIONI \u2014 solo file con warning  (usa --verbose per lista completa)")
+            print("  SIZES — only files with warnings  (use --verbose for the full list)")
             print(SEP)
             for l in warn_lines:
                 print(l)
@@ -477,119 +477,119 @@ def print_summary(result: ScanResult, active_categories: set[str], mode: str):
 
     SEP = "=" * 70
     print(f"\n{SEP}")
-    print(f"  RIEPILOGO — {result.root}")
+    print(f"  SUMMARY — {result.root}")
     print(f"{SEP}")
-    print(f"  Modalità:             {mode}")
-    print(f"  Categorie attive:     {', '.join(sorted(active_categories))}")
+    print(f"  Mode:                 {mode}")
+    print(f"  Active categories:    {', '.join(sorted(active_categories))}")
     print()
-    print(f"  File da eliminare:    {len(to_delete):>6}  ({human_size(total_delete)})")
+    print(f"  Files to delete:      {len(to_delete):>6}  ({human_size(total_delete)})")
     if result.venv_dirs:
-        print(f"  Venv da eliminare:    {len(result.venv_dirs):>6}  ({human_size(total_venv)})")
-    print(f"  File da tenere:       {len(to_keep):>6}  ({human_size(total_keep)})")
+        print(f"  Venvs to delete:      {len(result.venv_dirs):>6}  ({human_size(total_venv)})")
+    print(f"  Files to keep:        {len(to_keep):>6}  ({human_size(total_keep)})")
     if result.submodule_dirs_populated or result.submodule_dirs_empty:
         tot_sub = len(result.submodule_dirs_populated) + len(result.submodule_dirs_empty)
-        print(f"  Submoduli esclusi:    {tot_sub:>6}")
+        print(f"  Excluded submodules:  {tot_sub:>6}")
     if warnings:
         n_unk = sum(1 for r in warnings if r.warn_large_unknown)
         n_kept = sum(1 for r in warnings if r.warn_large_kept)
         print()
-        print(f"  ⚠  WARNING dimensioni:")
+        print(f"  ⚠  Size WARNINGs:")
         if n_unk:
-            print(f"      {n_unk} file con tipo non riconosciuto e dimensione elevata")
+            print(f"      {n_unk} file(s) of unrecognized type and large size")
         if n_kept:
-            print(f"      {n_kept} file tenuti con dimensione elevata (testo/codice grande)")
+            print(f"      {n_kept} kept file(s) of large size (large text/code)")
     print(f"{SEP}\n")
 
-    # Per estensione
+    # By extension
     by_ext: dict[str, list] = defaultdict(list)
     for r in to_delete:
         by_ext[r.path.suffix.lower()].append(r)
     if by_ext:
-        print("  Eliminati per estensione:")
+        print("  Deleted by extension:")
         for ext in sorted(by_ext, key=lambda e: -sum(r.size for r in by_ext[e])):
             recs = by_ext[ext]
             size = sum(r.size for r in recs)
-            print(f"    {ext:8s}  →  {len(recs):5d} file  ({human_size(size)})")
+            print(f"    {ext:8s}  →  {len(recs):5d} files  ({human_size(size)})")
         print()
 
-    # Per categoria
-    print("  Eliminati per categoria:")
+    # By category
+    print("  Deleted by category:")
     for cat_name in sorted(active_categories):
         cat = CATEGORIES.get(cat_name, {})
         if cat_name == "venv":
             if result.venv_dirs:
-                print(f"    {cat.get('label', cat_name):40s}  {len(result.venv_dirs):5d} directory")
+                print(f"    {cat.get('label', cat_name):40s}  {len(result.venv_dirs):5d} directories")
             continue
         recs = [r for r in to_delete if r.category == cat_name]
         if recs:
-            print(f"    {cat.get('label', cat_name):40s}  {len(recs):5d} file")
+            print(f"    {cat.get('label', cat_name):40s}  {len(recs):5d} files")
     print()
 
-    # Warning dettagliato
+    # Detailed warnings
     if warnings:
-        print("  ⚠  File con warning dimensione (da verificare manualmente):")
+        print("  ⚠  Files with size warning (verify manually):")
         for r in sorted(warnings, key=lambda r: -r.size):
             rel = r.path.relative_to(result.root)
-            tag = "tipo sconosciuto" if r.warn_large_unknown else "testo/codice grande"
+            tag = "unknown type" if r.warn_large_unknown else "large text/code"
             print(f"    {human_size(r.size):>10}  [{tag}]  {rel}")
         print()
 
 
 def save_log(result: ScanResult, filepath: str):
     """
-    Scrive il log completo su file: size scan + dettaglio per sezione.
-    Viene sempre chiamato (percorso default o esplicito via --out-report).
+    Writes the full log to file: size scan + per-section detail.
+    Always called (default path or explicit via --out-report).
     """
     to_delete = result.to_delete
     to_keep = result.to_keep
     warnings = result.large_warnings
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write("# strip_repo.py — log completo\n")
+        f.write("# strip_repo.py — full log\n")
         f.write(f"# Root: {result.root}\n\n")
 
-        # Size scan completo
+        # Full size scan
         for line in _build_size_report_lines(result):
             f.write(line + "\n")
         f.write("\n")
 
-        f.write("# ── FILE DA ELIMINARE ────────────────────────────────\n")
+        f.write("# ── FILES TO DELETE ──────────────────────────────────\n")
         for r in sorted(to_delete, key=lambda r: r.path):
             rel = r.path.relative_to(result.root)
             f.write(f"{human_size(r.size):>10}  [{r.category}]  {rel}\n")
 
         if result.venv_dirs:
-            f.write("\n# ── VENV DA ELIMINARE ────────────────────────────────\n")
+            f.write("\n# ── VENVS TO DELETE ──────────────────────────────────\n")
             for d in result.venv_dirs:
                 rel = d.relative_to(result.root)
                 f.write(f"{human_size(dir_total_size(d)):>10}  [venv]  {rel}/\n")
 
-        f.write("\n# ── FILE TENUTI ──────────────────────────────────────\n")
+        f.write("\n# ── KEPT FILES ───────────────────────────────────────\n")
         for r in sorted(to_keep, key=lambda r: -r.size):
             rel = r.path.relative_to(result.root)
             warn = "  ⚠" if (r.warn_large_kept or r.warn_large_unknown) else ""
             f.write(f"{human_size(r.size):>10}  {rel}{warn}\n")
 
         if warnings:
-            f.write("\n# ── WARNING DIMENSIONI ───────────────────────────────\n")
+            f.write("\n# ── SIZE WARNINGS ────────────────────────────────────\n")
             for r in sorted(warnings, key=lambda r: -r.size):
                 rel = r.path.relative_to(result.root)
-                tag = "tipo sconosciuto" if r.warn_large_unknown else "testo grande"
+                tag = "unknown type" if r.warn_large_unknown else "large text"
                 f.write(f"{human_size(r.size):>10}  [{tag}]  {rel}\n")
 
         if result.submodule_dirs_populated or result.submodule_dirs_empty:
-            f.write("\n# ── SUBMODULI ESCLUSI ────────────────────────────────\n")
+            f.write("\n# ── EXCLUDED SUBMODULES ──────────────────────────────\n")
             for d in sorted(result.submodule_dirs_populated | result.submodule_dirs_empty):
                 rel = d.relative_to(result.root)
                 populated = d in result.submodule_dirs_populated
-                f.write(f"{'popolato' if populated else 'vuoto':>10}  {rel}/\n")
+                f.write(f"{'populated' if populated else 'empty':>10}  {rel}/\n")
 
-    print(f"  Log salvato in: {filepath}")
+    print(f"  Log saved to: {filepath}")
 
 def copy_selective(result: ScanResult, output_dir: Path, dry_run: bool) -> tuple[int, int]:
     """
-    Ricrea output_dir copiando solo i file da tenere.
-    Restituisce (copiati, errori).
+    Recreates output_dir copying only the files to keep.
+    Returns (copied, errors).
     """
     to_keep = result.to_keep
     ok = err = 0
@@ -608,14 +608,14 @@ def copy_selective(result: ScanResult, output_dir: Path, dry_run: bool) -> tuple
             shutil.copy2(rec.path, dest)
             ok += 1
         except OSError as e:
-            print(f"  ERRORE copia: {rel} — {e}", file=sys.stderr)
+            print(f"  COPY ERROR: {rel} — {e}", file=sys.stderr)
             err += 1
 
     return ok, err
 
 
 # ─────────────────────────────────────────────────────────────
-#  ELIMINAZIONE IN-PLACE
+#  IN-PLACE DELETION
 # ─────────────────────────────────────────────────────────────
 
 def delete_files(files: list[FileRecord]) -> tuple[int, int]:
@@ -625,7 +625,7 @@ def delete_files(files: list[FileRecord]) -> tuple[int, int]:
             rec.path.unlink()
             ok += 1
         except OSError as e:
-            print(f"  ERRORE: {rec.path} — {e}", file=sys.stderr)
+            print(f"  ERROR: {rec.path} — {e}", file=sys.stderr)
             err += 1
     return ok, err
 
@@ -637,7 +637,7 @@ def delete_venv_dirs(venv_dirs: list[Path]) -> tuple[int, int]:
             shutil.rmtree(d)
             ok += 1
         except OSError as e:
-            print(f"  ERRORE rmtree: {d} — {e}", file=sys.stderr)
+            print(f"  rmtree ERROR: {d} — {e}", file=sys.stderr)
             err += 1
     return ok, err
 
@@ -660,7 +660,7 @@ def prune_empty_dirs(root: Path, dry_run: bool = False) -> list[Path]:
                 try:
                     d.rmdir()
                 except OSError as e:
-                    print(f"  ERRORE rmdir: {d} — {e}", file=sys.stderr)
+                    print(f"  rmdir ERROR: {d} — {e}", file=sys.stderr)
     return removed
 
 
@@ -703,73 +703,73 @@ def main():
     all_cat_names = list(CATEGORIES.keys())
 
     parser = argparse.ArgumentParser(
-        description="Pulisce un repository SoC rimuovendo file sensibili, "
-                    "pesanti o inutili prima di condividerlo.",
+        description="Cleans up a SoC repository by removing sensitive, heavy "
+                    "or useless files before sharing it.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Categorie disponibili: " + ", ".join(all_cat_names),
+        epilog="Available categories: " + ", ".join(all_cat_names),
     )
     parser.add_argument(
         "root", type=Path,
-        help="Directory radice del progetto",
+        help="Root directory of the project",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Mostra cosa verrebbe fatto senza toccare nulla",
+        help="Show what would be done without touching anything",
     )
     parser.add_argument(
         "--yes", "-y", action="store_true",
-        help="Salta la conferma interattiva",
+        help="Skip the interactive confirmation",
     )
     parser.add_argument(
         "--in-place", action="store_true",
-        help="Modifica la repo originale (pericoloso — richiede conferma extra)",
+        help="Modify the original repo (dangerous — requires extra confirmation)",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=None,
-        help="Directory di output per la copia (default: <root>_stripped)",
+        help="Output directory for the copy (default: <root>_stripped)",
     )
     parser.add_argument(
         "--include-submodules", action="store_true",
-        help="Includi i file dei submoduli Git nella copia",
+        help="Include Git submodule files in the copy",
     )
     parser.add_argument(
         "--only", nargs="+", metavar="CAT", choices=all_cat_names,
-        help="Attiva solo le categorie elencate",
+        help="Activate only the listed categories",
     )
     parser.add_argument(
         "--skip", nargs="+", metavar="CAT", choices=all_cat_names,
-        help="Disattiva le categorie elencate",
+        help="Deactivate the listed categories",
     )
     parser.add_argument(
         "--extra-ext", action="append", default=[],
-        help="Estensioni aggiuntive da rimuovere (ripetibile)",
+        help="Extra extensions to remove (repeatable)",
     )
     parser.add_argument(
         "--size-warn-threshold", type=float, default=5.0, metavar="MB",
-        help="Soglia in MB per i warning sui file grandi (default: 5)",
+        help="Threshold in MB for large-file warnings (default: 5)",
     )
     parser.add_argument(
         "--out-report", type=str, default=None,
-        help="Percorso del file .log (default: <root>_strip.log accanto alla root)",
+        help="Path of the .log file (default: <root>_strip.log next to the root)",
     )
     parser.add_argument(
         "--verbose", action="store_true",
-        help="Stampa a schermo la lista completa file per file (default: solo riepilogo)",
+        help="Print the full file-by-file list to screen (default: summary only)",
     )
     parser.add_argument(
         "--keep-empty-dirs", action="store_true",
-        help="Non rimuovere cartelle vuote (solo --in-place)",
+        help="Do not remove empty directories (only --in-place)",
     )
 
     args = parser.parse_args()
 
-    # Validazione root
+    # Root validation
     root = args.root.resolve()
     if not root.is_dir():
-        print(f"Errore: '{root}' non è una directory valida.", file=sys.stderr)
+        print(f"Error: '{root}' is not a valid directory.", file=sys.stderr)
         sys.exit(1)
 
-    # Categorie attive
+    # Active categories
     if args.only:
         active = set(args.only)
     else:
@@ -777,116 +777,116 @@ def main():
     if args.skip:
         active -= set(args.skip)
     if not active:
-        print("Errore: nessuna categoria attiva.", file=sys.stderr)
+        print("Error: no active category.", file=sys.stderr)
         sys.exit(1)
 
-    # Estensioni extra
+    # Extra extensions
     extra_ext = set()
     for ext in args.extra_ext:
         if not ext.startswith("."):
             ext = "." + ext
         extra_ext.add(ext.lower())
 
-    # Modalità operativa
+    # Operating mode
     in_place = args.in_place
     if in_place:
-        mode_label = "IN-PLACE (modifica originale)"
+        mode_label = "IN-PLACE (modify original)"
         output_dir = None
     else:
         if args.output_dir:
             output_dir = args.output_dir.resolve()
         else:
             output_dir = root.parent / (root.name + "_stripped")
-        mode_label = f"COPIA SICURA → {output_dir}"
+        mode_label = f"SAFE COPY → {output_dir}"
 
     size_warn_bytes = int(args.size_warn_threshold * 1024 * 1024)
 
-    # ── SCANSIONE ──────────────────────────────────────────────
-    print(f"\n  Scansione in corso: {root} ...")
+    # ── SCAN ───────────────────────────────────────────────────
+    print(f"\n  Scanning: {root} ...")
     result = scan(root, active, extra_ext, size_warn_bytes, args.include_submodules)
 
     if not result.all_records and not result.venv_dirs:
-        print("\n  Nessun file trovato. Nulla da fare.\n")
+        print("\n  No file found. Nothing to do.\n")
         sys.exit(0)
 
-    # ── REPORT DIMENSIONI (sempre, tutti i file) ───────────────
+    # ── SIZE REPORT (always, all files) ────────────────────────
     print_size_report(result, args.verbose)
 
-    # ── RIEPILOGO ──────────────────────────────────────────────
+    # ── SUMMARY ────────────────────────────────────────────────
     print_summary(result, active, mode_label)
 
-    # ── LOG SU FILE (sempre) ────────────────────────
+    # ── LOG TO FILE (always) ─────────────────────────
     log_path = args.out_report if args.out_report else str(root.parent / (root.name + '_strip.log'))
     save_log(result, log_path)
 
     # ── DRY-RUN ────────────────────────────────────────────────
     if args.dry_run:
         if in_place:
-            print("  [DRY-RUN] Nessun file eliminato.")
+            print("  [DRY-RUN] No file deleted.")
             empty_dirs = find_dirs_that_would_be_empty(result)
             if not args.keep_empty_dirs and empty_dirs:
-                print(f"\n  Cartelle che verrebbero rimosse (rimaste vuote): {len(empty_dirs)}")
+                print(f"\n  Directories that would be removed (left empty): {len(empty_dirs)}")
                 for d in empty_dirs:
                     print(f"    {d.relative_to(root)}/")
         else:
-            print(f"  [DRY-RUN] Verrebbero copiati {len(result.to_keep)} file in:")
+            print(f"  [DRY-RUN] Would copy {len(result.to_keep)} files to:")
             print(f"    {output_dir}")
         print()
         sys.exit(0)
 
-    # ── CONFERMA ───────────────────────────────────────────────
+    # ── CONFIRMATION ───────────────────────────────────────────
     if not args.yes:
         if in_place:
-            # Doppia conferma per l'operazione distruttiva
-            print("  ⚠  ATTENZIONE: modalità IN-PLACE. La repo originale verrà modificata.")
-            risposta = input(
-                f"  Confermi l'eliminazione di {len(result.to_delete)} file"
-                + (f" e {len(result.venv_dirs)} venv" if result.venv_dirs else "")
-                + " DALLA REPO ORIGINALE? [scrivi 'SI' in maiuscolo per confermare] "
+            # Double confirmation for the destructive operation
+            print("  ⚠  WARNING: IN-PLACE mode. The original repo will be modified.")
+            answer = input(
+                f"  Confirm deletion of {len(result.to_delete)} files"
+                + (f" and {len(result.venv_dirs)} venvs" if result.venv_dirs else "")
+                + " FROM THE ORIGINAL REPO? [type 'YES' in uppercase to confirm] "
             ).strip()
-            if risposta != "SI":
-                print("  Operazione annullata.\n")
+            if answer != "YES":
+                print("  Operation cancelled.\n")
                 sys.exit(0)
         else:
             if output_dir.exists():
-                print(f"  ⚠  La directory di output esiste già: {output_dir}")
-                risposta = input(
-                    f"  Sovrascrivere copiando {len(result.to_keep)} file da tenere? [s/N] "
+                print(f"  ⚠  The output directory already exists: {output_dir}")
+                answer = input(
+                    f"  Overwrite by copying {len(result.to_keep)} files to keep? [y/N] "
                 ).strip().lower()
             else:
-                risposta = input(
-                    f"  Copiare {len(result.to_keep)} file in '{output_dir}'? [s/N] "
+                answer = input(
+                    f"  Copy {len(result.to_keep)} files to '{output_dir}'? [y/N] "
                 ).strip().lower()
-            if risposta not in ("s", "si", "sì", "y", "yes"):
-                print("  Operazione annullata.\n")
+            if answer not in ("y", "yes"):
+                print("  Operation cancelled.\n")
                 sys.exit(0)
 
-    # ── ESECUZIONE ─────────────────────────────────────────────
+    # ── EXECUTION ──────────────────────────────────────────────
     if in_place:
         f_ok, f_err = delete_files(result.to_delete)
-        print(f"\n  File eliminati: {f_ok}, errori: {f_err}")
+        print(f"\n  Files deleted: {f_ok}, errors: {f_err}")
 
         if result.venv_dirs:
             v_ok, v_err = delete_venv_dirs(result.venv_dirs)
-            print(f"  Venv rimossi: {v_ok}, errori: {v_err}")
+            print(f"  Venvs removed: {v_ok}, errors: {v_err}")
 
         if not args.keep_empty_dirs:
             pruned = prune_empty_dirs(root)
             if pruned:
-                print(f"  Cartelle vuote rimosse: {len(pruned)}")
+                print(f"  Empty directories removed: {len(pruned)}")
                 for d in pruned[:15]:
                     print(f"    {d.relative_to(root)}/")
                 if len(pruned) > 15:
-                    print(f"    ... e altre {len(pruned) - 15}")
+                    print(f"    ... and {len(pruned) - 15} more")
             else:
-                print("  Nessuna cartella rimasta vuota.")
+                print("  No directory left empty.")
     else:
-        print(f"\n  Copia selettiva in corso → {output_dir} ...")
+        print(f"\n  Selective copy in progress → {output_dir} ...")
         c_ok, c_err = copy_selective(result, output_dir, dry_run=False)
-        print(f"  File copiati: {c_ok}, errori: {c_err}")
+        print(f"  Files copied: {c_ok}, errors: {c_err}")
         if result.large_warnings:
-            print(f"\n  ⚠  {len(result.large_warnings)} file con warning dimensione nella copia.")
-            print(f"     Vedi il log per i dettagli: {log_path}")
+            print(f"\n  ⚠  {len(result.large_warnings)} file(s) with size warning in the copy.")
+            print(f"     See the log for details: {log_path}")
 
     print()
 

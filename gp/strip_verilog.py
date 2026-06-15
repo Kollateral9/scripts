@@ -2,19 +2,19 @@
 """
 strip_hdl.py
 ~~~~~~~~~~~~
-Cerca e rimuove file Verilog / SystemVerilog / VHDL da un progetto,
-preservando tutto il resto (BUILD, CMake, script, C, Python, ecc.).
-Dopo l'eliminazione, rimuove ricorsivamente le cartelle rimaste vuote.
+Finds and removes Verilog / SystemVerilog / VHDL files from a project,
+preserving everything else (BUILD, CMake, scripts, C, Python, etc.).
+After deletion, recursively removes the directories left empty.
 
-Uso:
-    python3 strip_hdl.py /percorso/alla/repo
+Usage:
+    python3 strip_hdl.py /path/to/repo
 
-Opzioni:
-    --dry-run         Mostra solo cosa verrebbe eliminato, senza toccare nulla
-    --yes             Salta la conferma interattiva
-    --extra-ext EXT   Aggiunge estensioni extra da rimuovere (ripetibile)
-    --out-report F    Salva il report in un file di testo
-    --keep-empty-dirs Non rimuovere le cartelle vuote dopo l'eliminazione
+Options:
+    --dry-run         Only show what would be deleted, without touching anything
+    --yes             Skip the interactive confirmation
+    --extra-ext EXT   Add extra extensions to remove (repeatable)
+    --out-report F    Save the report to a text file
+    --keep-empty-dirs Do not remove the directories left empty
 """
 
 import argparse
@@ -23,21 +23,21 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 
-# Estensioni Verilog / SystemVerilog / VHDL (case-insensitive)
+# Verilog / SystemVerilog / VHDL extensions (case-insensitive)
 DEFAULT_EXTENSIONS = {
     # Verilog / SystemVerilog
     ".v",
     ".sv",
     ".vh",
     ".svh",
-    ".svi",        # SystemVerilog include (usato in alcuni flussi)
-    ".vlib",       # library file Verilog
+    ".svi",        # SystemVerilog include (used in some flows)
+    ".vlib",       # Verilog library file
     # VHDL
     ".vhd",
     ".vhdl",
 }
 
-# Directory da ignorare sempre (evita di entrare in .git, build artifacts, ecc.)
+# Directories to always ignore (avoids descending into .git, build artifacts, etc.)
 SKIP_DIRS = {
     ".git",
     "__pycache__",
@@ -51,10 +51,10 @@ SKIP_DIRS = {
 
 
 def find_verilog_files(root: Path, extensions: set[str]) -> list[Path]:
-    """Scansiona ricorsivamente e restituisce i file con le estensioni date."""
+    """Scans recursively and returns the files with the given extensions."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
-        # Elimina in-place le directory da non visitare
+        # Prune in-place the directories we should not visit
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for fname in filenames:
             if Path(fname).suffix.lower() in extensions:
@@ -72,7 +72,7 @@ def human_size(nbytes: int) -> str:
 
 
 def print_summary(files: list[Path], root: Path, extensions: set[str]):
-    """Stampa un riepilogo raggruppato per estensione e directory."""
+    """Prints a summary grouped by extension and directory."""
     by_ext = defaultdict(list)
     total_size = 0
 
@@ -84,77 +84,77 @@ def print_summary(files: list[Path], root: Path, extensions: set[str]):
             pass
 
     print(f"\n{'='*60}")
-    print(f"  RIEPILOGO SCAN — {root}")
+    print(f"  SCAN SUMMARY — {root}")
     print(f"{'='*60}")
-    print(f"  File trovati:  {len(files)}")
-    print(f"  Dimensione:    {human_size(total_size)}")
-    print(f"  Estensioni:    {', '.join(sorted(extensions))}")
+    print(f"  Files found:   {len(files)}")
+    print(f"  Size:          {human_size(total_size)}")
+    print(f"  Extensions:    {', '.join(sorted(extensions))}")
     print(f"{'='*60}\n")
 
-    # Breakdown per estensione
-    print("  Per estensione:")
+    # Breakdown by extension
+    print("  By extension:")
     for ext in sorted(by_ext):
         count = len(by_ext[ext])
         size = sum(f.stat().st_size for f in by_ext[ext] if f.exists())
-        print(f"    {ext:6s}  →  {count:5d} file  ({human_size(size)})")
+        print(f"    {ext:6s}  →  {count:5d} files  ({human_size(size)})")
 
-    # Top 10 directory con più file
+    # Top 10 directories with the most files
     by_dir = defaultdict(int)
     for f in files:
         rel = f.relative_to(root)
         top = rel.parts[0] if len(rel.parts) > 1 else "."
         by_dir[top] += 1
 
-    print("\n  Directory principali:")
+    print("\n  Main directories:")
     for d, count in sorted(by_dir.items(), key=lambda x: -x[1])[:10]:
-        print(f"    {d:30s}  {count:5d} file")
+        print(f"    {d:30s}  {count:5d} files")
     print()
 
 
 def save_report(files: list[Path], root: Path, filepath: str):
-    """Salva la lista completa dei file in un file di testo."""
+    """Saves the full list of files to a text file."""
     with open(filepath, "w") as f:
         for p in files:
             f.write(str(p.relative_to(root)) + "\n")
-    print(f"  Report salvato in: {filepath}")
+    print(f"  Report saved to: {filepath}")
 
 
 def delete_files(files: list[Path]) -> tuple[int, int]:
-    """Elimina i file. Restituisce (successi, errori)."""
+    """Deletes the files. Returns (successes, errors)."""
     ok, err = 0, 0
     for f in files:
         try:
             f.unlink()
             ok += 1
         except OSError as e:
-            print(f"  ERRORE: {f} — {e}", file=sys.stderr)
+            print(f"  ERROR: {f} — {e}", file=sys.stderr)
             err += 1
     return ok, err
 
 
 def prune_empty_dirs(root: Path, dry_run: bool = False) -> list[Path]:
-    """Rimuove ricorsivamente le cartelle vuote dal basso verso l'alto.
+    """Recursively removes empty directories from the bottom up.
 
-    Funziona bottom-up: se una sottocartella diventa vuota dopo la
-    rimozione dei file HDL, viene eliminata. Se questo rende vuota
-    anche la cartella genitore, viene eliminata a sua volta, e così via
-    fino alla root (che non viene mai rimossa).
+    Works bottom-up: if a subdirectory becomes empty after removing the
+    HDL files, it gets deleted. If that also empties the parent
+    directory, it gets deleted in turn, and so on up to the root
+    (which is never removed).
 
-    Restituisce la lista delle cartelle rimosse (o che verrebbero
-    rimosse in dry-run).
+    Returns the list of removed directories (or those that would be
+    removed in dry-run).
     """
     removed = []
-    # os.walk bottom-up: visita prima le foglie
+    # os.walk bottom-up: visit the leaves first
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
         d = Path(dirpath)
-        # Non rimuovere mai la root stessa
+        # Never remove the root itself
         if d == root:
             continue
-        # Salta le directory protette
+        # Skip protected directories
         if d.name in SKIP_DIRS:
             continue
-        # Controlla se la directory è effettivamente vuota ora
-        # (i figli potrebbero essere stati rimossi nelle iterazioni precedenti)
+        # Check whether the directory is actually empty now
+        # (children may have been removed in previous iterations)
         try:
             remaining = list(d.iterdir())
         except OSError:
@@ -165,7 +165,7 @@ def prune_empty_dirs(root: Path, dry_run: bool = False) -> list[Path]:
                 try:
                     d.rmdir()
                 except OSError as e:
-                    print(f"  ERRORE rmdir: {d} — {e}", file=sys.stderr)
+                    print(f"  ERROR rmdir: {d} — {e}", file=sys.stderr)
 
     return removed
 
@@ -173,15 +173,15 @@ def prune_empty_dirs(root: Path, dry_run: bool = False) -> list[Path]:
 def find_dirs_that_would_be_empty(
     files_to_delete: list[Path], root: Path
 ) -> list[Path]:
-    """Simula quali cartelle resterebbero vuote dopo la rimozione dei file.
+    """Simulates which directories would be left empty after removing the files.
 
-    Usata in modalità dry-run per dare un'anteprima senza toccare nulla.
+    Used in dry-run mode to give a preview without touching anything.
     """
-    # Raccogli tutte le directory del progetto e il loro contenuto
+    # Collect all the project directories and their contents
     deleted_set = set(files_to_delete)
     would_remove: set[Path] = set()
 
-    # Bottom-up: parti dalle foglie
+    # Bottom-up: start from the leaves
     all_dirs = set()
     for f in files_to_delete:
         p = f.parent
@@ -189,7 +189,7 @@ def find_dirs_that_would_be_empty(
             all_dirs.add(p)
             p = p.parent
 
-    # Ordina per profondità decrescente (foglie prima)
+    # Sort by decreasing depth (leaves first)
     for d in sorted(all_dirs, key=lambda x: len(x.parts), reverse=True):
         if d.name in SKIP_DIRS:
             continue
@@ -197,13 +197,13 @@ def find_dirs_that_would_be_empty(
             children = list(d.iterdir())
         except OSError:
             continue
-        # Una directory è "vuota" se ogni suo figlio è un file da eliminare
-        # oppure una sottocartella che verrebbe rimossa
+        # A directory is "empty" if each of its children is a file to delete
+        # or a subdirectory that would be removed
         all_gone = all(
             (c in deleted_set) or (c in would_remove)
             for c in children
         )
-        if all_gone and children:  # non segnalare dir già vuote
+        if all_gone and children:  # do not report already-empty dirs
             would_remove.add(d)
 
     return sorted(would_remove)
@@ -211,49 +211,49 @@ def find_dirs_that_would_be_empty(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Rimuove file Verilog/SystemVerilog/VHDL da un progetto "
-                    "e pulisce le cartelle rimaste vuote"
+        description="Removes Verilog/SystemVerilog/VHDL files from a project "
+                    "and cleans up the directories left empty"
     )
     parser.add_argument(
         "root",
         type=Path,
-        help="Directory radice del progetto"
+        help="Root directory of the project"
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Mostra cosa verrebbe eliminato senza cancellare nulla"
+        help="Show what would be deleted without removing anything"
     )
     parser.add_argument(
         "--yes", "-y",
         action="store_true",
-        help="Salta la conferma interattiva"
+        help="Skip the interactive confirmation"
     )
     parser.add_argument(
         "--extra-ext",
         action="append",
         default=[],
-        help="Estensioni aggiuntive da rimuovere (es: --extra-ext .tcl)"
+        help="Extra extensions to remove (e.g. --extra-ext .tcl)"
     )
     parser.add_argument(
         "--out-report",
         type=str,
         default=None,
-        help="Salva la lista dei file trovati in un file di testo"
+        help="Save the list of found files to a text file"
     )
     parser.add_argument(
         "--keep-empty-dirs",
         action="store_true",
-        help="Non rimuovere le cartelle rimaste vuote dopo l'eliminazione"
+        help="Do not remove the directories left empty after deletion"
     )
 
     args = parser.parse_args()
 
     if not args.root.is_dir():
-        print(f"Errore: '{args.root}' non è una directory valida.", file=sys.stderr)
+        print(f"Error: '{args.root}' is not a valid directory.", file=sys.stderr)
         sys.exit(1)
 
-    # Componi set estensioni
+    # Build the extension set
     extensions = DEFAULT_EXTENSIONS.copy()
     for ext in args.extra_ext:
         if not ext.startswith("."):
@@ -261,67 +261,67 @@ def main():
         extensions.add(ext.lower())
 
     # Scan
-    print(f"\n  Scansione in corso: {args.root.resolve()} ...")
+    print(f"\n  Scanning: {args.root.resolve()} ...")
     files = find_verilog_files(args.root, extensions)
 
     if not files:
-        print("\n  Nessun file HDL (Verilog/SV/VHDL) trovato. Nulla da fare.\n")
+        print("\n  No HDL file (Verilog/SV/VHDL) found. Nothing to do.\n")
         sys.exit(0)
 
     print_summary(files, args.root, extensions)
 
-    # Report opzionale
+    # Optional report
     if args.out_report:
         save_report(files, args.root, args.out_report)
 
-    # Lista completa (mostra i primi 30 + ellipsis)
-    print("  File che verranno eliminati:")
+    # Full list (shows the first 30 + ellipsis)
+    print("  Files that will be deleted:")
     show_max = 30
     for f in files[:show_max]:
         print(f"    {f.relative_to(args.root)}")
     if len(files) > show_max:
-        print(f"    ... e altri {len(files) - show_max} file")
-        print(f"    (usa --out-report per la lista completa)")
+        print(f"    ... and {len(files) - show_max} more files")
+        print(f"    (use --out-report for the full list)")
     print()
 
     if args.dry_run:
-        print("  [DRY-RUN] Nessun file eliminato.")
+        print("  [DRY-RUN] No file deleted.")
         if not args.keep_empty_dirs:
-            # Simula la pulizia: conta le cartelle che conterrebbero solo file HDL
+            # Simulate the cleanup: count the dirs that would contain only HDL files
             empty_dirs = find_dirs_that_would_be_empty(files, args.root)
             if empty_dirs:
-                print(f"\n  Cartelle che verrebbero rimosse (rimaste vuote): {len(empty_dirs)}")
+                print(f"\n  Directories that would be removed (left empty): {len(empty_dirs)}")
                 for d in empty_dirs[:20]:
                     print(f"    {d.relative_to(args.root)}/")
                 if len(empty_dirs) > 20:
-                    print(f"    ... e altre {len(empty_dirs) - 20}")
+                    print(f"    ... and {len(empty_dirs) - 20} more")
         print()
         sys.exit(0)
 
-    # Conferma
+    # Confirmation
     if not args.yes:
-        risposta = input(
-            f"  Confermi l'eliminazione di {len(files)} file? [s/N] "
+        answer = input(
+            f"  Confirm deletion of {len(files)} files? [y/N] "
         ).strip().lower()
-        if risposta not in ("s", "si", "sì", "y", "yes"):
-            print("  Operazione annullata.\n")
+        if answer not in ("y", "yes"):
+            print("  Operation cancelled.\n")
             sys.exit(0)
 
-    # Eliminazione file
+    # Delete files
     ok, err = delete_files(files)
-    print(f"\n  File: {ok} eliminati, {err} errori.")
+    print(f"\n  Files: {ok} deleted, {err} errors.")
 
-    # Pulizia cartelle vuote
+    # Clean up empty directories
     if not args.keep_empty_dirs:
         pruned = prune_empty_dirs(args.root)
         if pruned:
-            print(f"  Cartelle vuote rimosse: {len(pruned)}")
+            print(f"  Empty directories removed: {len(pruned)}")
             for d in pruned[:15]:
                 print(f"    {d.relative_to(args.root)}/")
             if len(pruned) > 15:
-                print(f"    ... e altre {len(pruned) - 15}")
+                print(f"    ... and {len(pruned) - 15} more")
         else:
-            print("  Nessuna cartella rimasta vuota.")
+            print("  No directory left empty.")
     print()
 
 

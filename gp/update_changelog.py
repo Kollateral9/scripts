@@ -2,24 +2,24 @@
 """
 update_changelog.py
 -------------------
-Aggiorna (o crea) CHANGELOG.md nel formato "Keep a Changelog" leggendo
-i tag Git del repository corrente.
+Updates (or creates) CHANGELOG.md in the "Keep a Changelog" format by reading
+the Git tags of the current repository.
 
-Regole:
-- Considera solo tag semver "puri" (es. 1.2.3 oppure v1.2.3).
-  Esclude prerelease: -alpha, -beta, -rc, -SNAPSHOT, ecc.
-- Se CHANGELOG.md non esiste, lo crea a partire dal primo tag.
-- Se esiste, rileva quali tag mancano e li inserisce nell'ordine giusto
-  (versioni piu' recenti in cima).
-- Mantiene una sezione [Unreleased] con i commit successivi all'ultimo tag.
-- Include TUTTI i commit (nessun filtro) sotto un'unica sezione "Changed".
-- Converte gitmoji shortcode (":sparkles:") nel loro equivalente unicode ("✨")
-  cosi' da renderizzare correttamente nel markdown.
+Rules:
+- Only considers "pure" semver tags (e.g. 1.2.3 or v1.2.3).
+  Excludes prereleases: -alpha, -beta, -rc, -SNAPSHOT, etc.
+- If CHANGELOG.md does not exist, it is created starting from the first tag.
+- If it exists, detects which tags are missing and inserts them in the right
+  order (most recent versions on top).
+- Keeps an [Unreleased] section with the commits after the latest tag.
+- Includes ALL commits (no filtering) under a single "Changed" section.
+- Converts gitmoji shortcodes (":sparkles:") into their unicode equivalent ("✨")
+  so they render correctly in markdown.
 
-Uso:
-    python scripts/update_changelog.py            # aggiorna il file
-    python scripts/update_changelog.py --check    # exit 1 se mancano tag
-    python scripts/update_changelog.py --dry-run  # stampa senza scrivere
+Usage:
+    python scripts/update_changelog.py            # update the file
+    python scripts/update_changelog.py --check    # exit 1 if tags are missing
+    python scripts/update_changelog.py --dry-run  # print without writing
 """
 
 from __future__ import annotations
@@ -34,16 +34,16 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# Costanti
+# Constants
 # ---------------------------------------------------------------------------
 
 CHANGELOG_FILENAME = "CHANGELOG.md"
 
-# Semver "stabile": accetta "1.2.3" o "v1.2.3". Nessun suffisso (-alpha, -rc, ...).
+# "Stable" semver: accepts "1.2.3" or "v1.2.3". No suffix (-alpha, -rc, ...).
 SEMVER_STABLE_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
-# Header di versione nel changelog: "## [1.2.3] - 2024-01-15" oppure "## 1.2.3"
-# Cattura la versione per capire quali tag sono gia' documentati.
+# Version header in the changelog: "## [1.2.3] - 2024-01-15" or "## 1.2.3".
+# Captures the version to figure out which tags are already documented.
 CHANGELOG_VERSION_HEADER_RE = re.compile(
     r"^##\s+\[?(v?\d+\.\d+\.\d+)\]?",
     re.MULTILINE,
@@ -64,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 """
 
-# Regex per trovare e aggiornare la riga "Last generated: ..." ad ogni esecuzione.
+# Regex to find and update the "Last generated: ..." line on every run.
 LAST_GENERATED_RE = re.compile(
     r"<!--\s*Last generated:.*?-->",
     re.DOTALL,
@@ -72,7 +72,7 @@ LAST_GENERATED_RE = re.compile(
 
 
 def current_timestamp_utc() -> str:
-    """Ritorna il timestamp UTC corrente nel formato 'YYYY-MM-DD HH:MM:SS UTC'."""
+    """Returns the current UTC timestamp in 'YYYY-MM-DD HH:MM:SS UTC' format."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
@@ -82,15 +82,15 @@ def current_timestamp_utc() -> str:
 
 @dataclass
 class Version:
-    """Rappresenta una versione semver stabile."""
-    raw: str            # come appare nel tag git, es. "v1.2.3"
+    """Represents a stable semver version."""
+    raw: str            # as it appears in the git tag, e.g. "v1.2.3"
     major: int
     minor: int
     patch: int
 
     @property
     def clean(self) -> str:
-        """Versione senza prefisso 'v', per l'header del changelog."""
+        """Version without the 'v' prefix, for the changelog header."""
         return f"{self.major}.{self.minor}.{self.patch}"
 
     def sort_key(self) -> tuple[int, int, int]:
@@ -107,7 +107,7 @@ class Version:
 
 @dataclass
 class Release:
-    """Una release da scrivere nel changelog."""
+    """A release to write into the changelog."""
     version: Version
     date: str                                      # YYYY-MM-DD
     entries: list[str] = field(default_factory=list)
@@ -118,7 +118,7 @@ class Release:
 # ---------------------------------------------------------------------------
 
 def run_git(*args: str) -> str:
-    """Esegue git e ritorna stdout. Solleva RuntimeError in caso di errore."""
+    """Runs git and returns stdout. Raises RuntimeError on failure."""
     result = subprocess.run(
         ["git", *args],
         capture_output=True,
@@ -127,7 +127,7 @@ def run_git(*args: str) -> str:
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"git {' '.join(args)} fallito: {result.stderr.strip()}"
+            f"git {' '.join(args)} failed: {result.stderr.strip()}"
         )
     return result.stdout
 
@@ -138,7 +138,7 @@ def repo_root() -> Path:
 
 
 def list_stable_tags() -> list[Version]:
-    """Ritorna tutti i tag semver stabili, dal piu' recente al piu' vecchio."""
+    """Returns all stable semver tags, from most recent to oldest."""
     raw = run_git("tag", "--list").splitlines()
     versions = [v for v in (Version.parse(t) for t in raw) if v is not None]
     versions.sort(key=Version.sort_key, reverse=True)
@@ -146,15 +146,15 @@ def list_stable_tags() -> list[Version]:
 
 
 def tag_date(tag: str) -> str:
-    """Data (YYYY-MM-DD) del commit puntato dal tag."""
+    """Date (YYYY-MM-DD) of the commit the tag points to."""
     out = run_git("log", "-1", "--format=%ad", "--date=short", tag).strip()
     return out
 
 
 def commits_between(from_ref: str | None, to_ref: str) -> list[str]:
-    """Lista di commit subject tra due ref (from escluso, to incluso).
+    """List of commit subjects between two refs (from excluded, to included).
 
-    Se from_ref e' None, prende tutta la storia fino a to_ref.
+    If from_ref is None, takes the whole history up to to_ref.
     """
     rev_range = f"{from_ref}..{to_ref}" if from_ref else to_ref
     out = run_git("log", rev_range, "--pretty=format:%s", "--no-merges")
@@ -162,19 +162,19 @@ def commits_between(from_ref: str | None, to_ref: str) -> list[str]:
 
 
 def has_commits_after(ref: str) -> bool:
-    """True se ci sono commit dopo il ref indicato (fino a HEAD)."""
+    """True if there are commits after the given ref (up to HEAD)."""
     out = run_git("log", f"{ref}..HEAD", "--pretty=format:%H").strip()
     return bool(out)
 
 
 # ---------------------------------------------------------------------------
-# Normalizzazione commit: converte gitmoji shortcode in unicode
+# Commit normalization: convert gitmoji shortcodes to unicode
 # ---------------------------------------------------------------------------
-# Tutti i commit vengono messi sotto "Changed" senza filtri ne' categorizzazione.
-# L'unica trasformazione e' convertire ":sparkles:" in "✨" ecc. per evitare
-# che gli shortcode restino non renderizzati nel markdown.
+# All commits go under "Changed" without filtering or categorization.
+# The only transformation is converting ":sparkles:" into "✨" etc. to avoid
+# leaving shortcodes unrendered in the markdown.
 #
-# Fonte: https://gitmoji.dev - lista completa delle gitmoji ufficiali.
+# Source: https://gitmoji.dev - complete list of the official gitmoji.
 
 GITMOJI_SHORTCODE_TO_UNICODE: dict[str, str] = {
     "art": "🎨",
@@ -253,16 +253,16 @@ GITMOJI_SHORTCODE_TO_UNICODE: dict[str, str] = {
     "airplane": "✈️",
 }
 
-# Regex per shortcode in qualunque posizione del messaggio
+# Regex for a shortcode anywhere in the message
 _SHORTCODE_RE = re.compile(r":([a-z0-9_+\-]+):")
 
 
 def normalize_commit(subject: str) -> str | None:
-    """Pulisce un subject di commit per il changelog.
+    """Cleans a commit subject for the changelog.
 
-    - Converte gitmoji shortcode (:sparkles:) nel loro unicode corrispondente.
-    - Non categorizza, non filtra, non modifica altro.
-    - Ritorna None se il subject e' vuoto.
+    - Converts gitmoji shortcodes (:sparkles:) into their unicode equivalent.
+    - Does not categorize, filter, or change anything else.
+    - Returns None if the subject is empty.
     """
     subject = subject.strip()
     if not subject:
@@ -273,15 +273,15 @@ def normalize_commit(subject: str) -> str | None:
         unicode_char = GITMOJI_SHORTCODE_TO_UNICODE.get(token)
         if unicode_char is not None:
             return unicode_char
-        # Shortcode sconosciuto: lo lascio intatto (potrebbe essere
-        # un riferimento legittimo come ":hh:mm:" o simili)
+        # Unknown shortcode: leave it untouched (it might be a legitimate
+        # reference such as ":hh:mm:" or similar)
         return match.group(0)
 
     return _SHORTCODE_RE.sub(_replace, subject).strip()
 
 
 def build_entries(commits: list[str]) -> list[str]:
-    """Ritorna la lista di commit normalizzati, deduplicata, per la sezione Changed."""
+    """Returns the list of normalized, deduplicated commits for the Changed section."""
     items: list[str] = []
     seen: set[str] = set()
     for subject in commits:
@@ -297,11 +297,11 @@ def build_entries(commits: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Parsing / rendering del CHANGELOG
+# Parsing / rendering of the CHANGELOG
 # ---------------------------------------------------------------------------
 
 def parse_existing_versions(changelog_path: Path) -> set[str]:
-    """Ritorna l'insieme delle versioni gia' documentate (formato pulito, senza 'v')."""
+    """Returns the set of already-documented versions (clean format, without 'v')."""
     if not changelog_path.exists():
         return set()
     text = changelog_path.read_text(encoding="utf-8")
@@ -313,7 +313,7 @@ def parse_existing_versions(changelog_path: Path) -> set[str]:
 
 
 def render_release(release: Release) -> str:
-    """Renderizza una release nel formato Keep a Changelog (sezione unica Changed)."""
+    """Renders a release in the Keep a Changelog format (single Changed section)."""
     lines = [f"## [{release.version.clean}] - {release.date}", ""]
     if release.entries:
         lines.append("### Changed")
@@ -335,7 +335,7 @@ def render_unreleased(entries: list[str]) -> str:
 
 
 def strip_unreleased_section(body: str) -> str:
-    """Rimuove l'eventuale sezione [Unreleased] esistente dal corpo del changelog."""
+    """Removes the existing [Unreleased] section (if any) from the changelog body."""
     pattern = re.compile(
         r"##\s+\[Unreleased\].*?(?=^##\s+\[?v?\d+\.\d+\.\d+\]?|\Z)",
         re.DOTALL | re.MULTILINE,
@@ -344,16 +344,16 @@ def strip_unreleased_section(body: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Logica principale
+# Main logic
 # ---------------------------------------------------------------------------
 
 def build_missing_releases(
     all_versions: list[Version],
     known_versions: set[str],
 ) -> list[Release]:
-    """Calcola le Release da aggiungere al changelog."""
-    # all_versions e' ordinato dal piu' recente al piu' vecchio.
-    # Per costruire i range abbiamo bisogno dell'ordine cronologico.
+    """Computes the Releases to add to the changelog."""
+    # all_versions is ordered from most recent to oldest.
+    # To build the ranges we need chronological order.
     chronological = list(reversed(all_versions))
 
     missing: list[Release] = []
@@ -366,7 +366,7 @@ def build_missing_releases(
             missing.append(release)
         prev_tag_raw = v.raw
 
-    # Riordina dalla piu' recente alla piu' vecchia per la scrittura
+    # Reorder from most recent to oldest for writing
     missing.sort(key=lambda r: r.version.sort_key(), reverse=True)
     return missing
 
@@ -387,12 +387,12 @@ def write_changelog(
     new_releases: list[Release],
     unreleased: list[str],
 ) -> str:
-    """Scrive il changelog unendo contenuto esistente e nuove sezioni. Ritorna il testo finale."""
+    """Writes the changelog merging existing content and new sections. Returns the final text."""
     timestamp = current_timestamp_utc()
 
     if changelog_path.exists():
         existing = changelog_path.read_text(encoding="utf-8")
-        # Separa header (tutto fino al primo ## [versione] o [Unreleased]) dal body
+        # Split the header (everything up to the first ## [version] or [Unreleased]) from the body
         split_re = re.compile(
             r"^##\s+\[?(?:Unreleased|v?\d+\.\d+\.\d+)\]?",
             re.MULTILINE,
@@ -406,9 +406,9 @@ def write_changelog(
             body = ""
         body = strip_unreleased_section(body)
 
-        # Aggiorna il timestamp nell'header esistente.
-        # Se manca (header legacy da versioni precedenti), rigenera l'header
-        # completo cosi' anche file vecchi si normalizzano al formato nuovo.
+        # Update the timestamp in the existing header.
+        # If it is missing (legacy header from older versions), regenerate the
+        # full header so old files normalize to the new format too.
         new_last_gen = f"<!-- Last generated: {timestamp} -->"
         if LAST_GENERATED_RE.search(header):
             header = LAST_GENERATED_RE.sub(new_last_gen, header)
@@ -423,14 +423,14 @@ def write_changelog(
         new_sections += render_release(release)
 
     final = header.rstrip() + "\n\n" + new_sections + body.lstrip()
-    # Normalizza: max una riga vuota consecutiva
+    # Normalize: at most one consecutive blank line
     final = re.sub(r"\n{3,}", "\n\n", final)
     if not final.endswith("\n"):
         final += "\n"
 
-    # Evita riscritture spurie: se l'unica differenza rispetto al file esistente
-    # e' la riga "Last generated", lascia il file (e il suo timestamp) invariato.
-    # Cosi' `git diff` non risulta sporco a ogni esecuzione senza modifiche reali.
+    # Avoid spurious rewrites: if the only difference from the existing file is
+    # the "Last generated" line, leave the file (and its timestamp) untouched.
+    # This keeps `git diff` clean across runs with no real changes.
     if changelog_path.exists():
         old = changelog_path.read_text(encoding="utf-8")
         if LAST_GENERATED_RE.sub("", old) == LAST_GENERATED_RE.sub("", final):
@@ -445,26 +445,26 @@ def write_changelog(
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Aggiorna CHANGELOG.md dai tag git.")
+    parser = argparse.ArgumentParser(description="Update CHANGELOG.md from git tags.")
     parser.add_argument("--check", action="store_true",
-                        help="Exit 1 se ci sono tag non documentati. Non scrive il file.")
+                        help="Exit 1 if there are undocumented tags. Does not write the file.")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Stampa cosa verrebbe scritto senza modificare il file.")
+                        help="Print what would be written without modifying the file.")
     parser.add_argument("--path", type=Path, default=None,
-                        help="Percorso del CHANGELOG.md (default: <repo_root>/CHANGELOG.md).")
+                        help="Path to CHANGELOG.md (default: <repo_root>/CHANGELOG.md).")
     args = parser.parse_args(argv)
 
     try:
         root = repo_root()
     except RuntimeError as e:
-        print(f"Errore: non sembra un repository git ({e})", file=sys.stderr)
+        print(f"Error: this does not look like a git repository ({e})", file=sys.stderr)
         return 2
 
     changelog_path = args.path or (root / CHANGELOG_FILENAME)
 
     all_versions = list_stable_tags()
     if not all_versions:
-        print("Nessun tag semver stabile trovato. Niente da fare.")
+        print("No stable semver tag found. Nothing to do.")
         return 0
 
     known = parse_existing_versions(changelog_path)
@@ -473,35 +473,35 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         if missing:
-            print(f"Tag non documentati nel changelog: "
+            print(f"Tags not documented in the changelog: "
                   f"{', '.join(r.version.clean for r in missing)}")
             return 1
-        print("Changelog allineato con i tag git.")
+        print("Changelog is in sync with the git tags.")
         return 0
 
     if not missing and not unreleased:
-        print("Changelog gia' aggiornato. Nessuna modifica necessaria.")
+        print("Changelog already up to date. No changes needed.")
         return 0
 
     if args.dry_run:
         print("=== DRY RUN ===")
         if missing:
-            print(f"Aggiungerei {len(missing)} release: "
+            print(f"Would add {len(missing)} release(s): "
                   f"{', '.join(r.version.clean for r in missing)}")
         if unreleased:
-            print(f"Sezione [Unreleased]: {len(unreleased)} commit")
+            print(f"[Unreleased] section: {len(unreleased)} commit(s)")
         return 0
 
     before = changelog_path.read_text(encoding="utf-8") if changelog_path.exists() else None
     after = write_changelog(changelog_path, missing, unreleased)
 
     if before == after:
-        print("Changelog gia' aggiornato. Nessuna modifica necessaria.")
+        print("Changelog already up to date. No changes needed.")
     elif missing:
-        print(f"CHANGELOG.md aggiornato con {len(missing)} nuova/e release: "
+        print(f"CHANGELOG.md updated with {len(missing)} new release(s): "
               f"{', '.join(r.version.clean for r in missing)}")
     else:
-        print("CHANGELOG.md aggiornato (sezione [Unreleased]).")
+        print("CHANGELOG.md updated ([Unreleased] section).")
     return 0
 
 
