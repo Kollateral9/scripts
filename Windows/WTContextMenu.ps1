@@ -1,31 +1,50 @@
 #Requires -Version 5.1
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
 
 # ============================================================
-# Add "Open in Windows Terminal Here" to the right-click menu
+# WTContextMenu.ps1 -- "Open in Windows Terminal Here" right-click menu
 # Supports both background (empty area) and folder right-click
 #
-# Usage:
-#   .\Install-WTContextMenu.ps1            -> Install context menu entries
-#   .\Install-WTContextMenu.ps1 -Uninstall -> Remove context menu entries
+# Usage (run -h / -Help / --help for full details):
+#   .\WTContextMenu.ps1            -> Install context menu entries
+#   .\WTContextMenu.ps1 -Uninstall -> Remove context menu entries
 #
 # No elevation required (writes to HKCU).
 # The script is idempotent: re-running it is always safe.
 # ============================================================
 
+# NOTE: param() must be the FIRST statement (only #Requires/comments may precede
+# it); otherwise PowerShell treats it as a command call and -Uninstall is ignored.
 param (
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [Alias('h')][switch]$Help
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+if ($Help) {
+    Write-Host @"
+WTContextMenu.ps1 - "Open in Windows Terminal Here" right-click entry (HKCU, no admin)
+
+USAGE
+    .\WTContextMenu.ps1              Install the context-menu entries
+    .\WTContextMenu.ps1 -Uninstall  Remove them
+    .\WTContextMenu.ps1 -h          Show this help (-Help / --help also work)
+
+NOTES
+    Writes to HKCU (no elevation needed). Idempotent: re-running is always safe.
+"@
+    exit 0
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 function Write-Step  ([string]$msg) { Write-Host "   $msg" }
-function Write-Ok    ([string]$msg) { Write-Host "   ✅ $msg" -ForegroundColor Green }
-function Write-Warn  ([string]$msg) { Write-Host "   ⚠️  $msg" -ForegroundColor Yellow }
-function Write-Fail  ([string]$msg) { Write-Host "   ❌ $msg" -ForegroundColor Red }
+function Write-Ok    ([string]$msg) { Write-Host "   [OK] $msg" -ForegroundColor Green }
+function Write-Warn  ([string]$msg) { Write-Host "   [!]  $msg" -ForegroundColor Yellow }
+function Write-Fail  ([string]$msg) { Write-Host "   [X] $msg" -ForegroundColor Red }
 function Write-Header([string]$msg) { Write-Host $msg }
 
 <#
@@ -54,7 +73,7 @@ function Set-RegistryValue {
     }
 
     if ($current -eq $Value) {
-        return $false   # Already correct – nothing to write
+        return $false   # Already correct - nothing to write
     }
 
     Set-ItemProperty -Path $KeyPath -Name $Name -Value $Value -Force
@@ -95,7 +114,7 @@ function Register-ContextMenuEntry {
 # ---------------------------------------------------------------------------
 
 if ($Uninstall) {
-    Write-Header '🗑️  Removing Windows Terminal context menu entries...'
+    Write-Header '[*]  Removing Windows Terminal context menu entries...'
 
     $regPaths = @(
         'HKCU:\Software\Classes\Directory\Background\shell\WindowsTerminal',
@@ -120,9 +139,9 @@ if ($Uninstall) {
 
     Write-Host ''
     if ($removedAny) {
-        Write-Header '✅ Uninstall complete. Right-click entries have been removed.'
+        Write-Header '[OK] Uninstall complete. Right-click entries have been removed.'
     } else {
-        Write-Header '✅ Nothing to remove – entries were not present.'
+        Write-Header '[OK] Nothing to remove - entries were not present.'
     }
     exit 0
 }
@@ -133,7 +152,7 @@ if ($Uninstall) {
 
 # --- 1. Locate wt.exe launcher (required) ---
 
-Write-Header '🔍 Locating Windows Terminal...'
+Write-Header '[*] Locating Windows Terminal...'
 
 $wtLauncher = "$env:LOCALAPPDATA\Microsoft\WindowsApps\wt.exe"
 
@@ -166,10 +185,10 @@ if ($wtPackage) {
         $iconSource = $candidate
         Write-Ok "Icon     : $iconSource  (from package: $($wtPackage.Name))"
     } else {
-        Write-Warn "Package found but WindowsTerminal.exe missing – using wt.exe as icon source."
+        Write-Warn "Package found but WindowsTerminal.exe missing - using wt.exe as icon source."
     }
 } else {
-    Write-Warn "WindowsApps not enumerable (normal for standard accounts) – using wt.exe as icon source."
+    Write-Warn "WindowsApps not enumerable (normal for standard accounts) - using wt.exe as icon source."
     Write-Ok "Icon     : $iconSource"
 }
 
@@ -191,7 +210,7 @@ $label = 'Open in Windows Terminal Here'
 
 # --- 4. Register entries ---
 
-Write-Header '📝 Registering context menu entries...'
+Write-Header '[*] Registering context menu entries...'
 
 $entries = @(
     @{
@@ -219,11 +238,11 @@ foreach ($entry in $entries) {
             -IconPath     $iconValue
 
         $tag = switch ($status) {
-            'created'   { '✅ Created'   }
-            'updated'   { '🔄 Updated'   }
-            'unchanged' { '✔️  Unchanged' }
+            'created'   { '[OK] Created'   }
+            'updated'   { '[~] Updated'   }
+            'unchanged' { '[=]  Unchanged' }
         }
-        Write-Step "$tag — $($entry.Desc)"
+        Write-Step "$tag - $($entry.Desc)"
     } catch {
         Write-Fail "Failed to register '$($entry.Desc)': $_"
         $anyError = $true
@@ -233,11 +252,11 @@ foreach ($entry in $entries) {
 Write-Host ''
 
 if ($anyError) {
-    Write-Header '⚠️  Installation completed with errors. Check the messages above.'
+    Write-Header '[!]  Installation completed with errors. Check the messages above.'
     exit 1
 }
 
-Write-Header '✅ Done! Right-click any folder or its background to open Windows Terminal there.'
+Write-Header '[OK] Done! Right-click any folder or its background to open Windows Terminal there.'
 Write-Step 'To remove these entries, run:'
-Write-Step "   .\Install-WTContextMenu.ps1 -Uninstall"
+Write-Step "   .\WTContextMenu.ps1 -Uninstall"
 exit 0
