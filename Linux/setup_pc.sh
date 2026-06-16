@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# ─────────────────────────────────────────────────────────────
-#  setup_dev.sh — Dev machine setup for Ubuntu/Debian
+# =============================================================
+#  setup_pc.sh -- Dev machine setup for Ubuntu/Debian (+ derivatives)
 #
-#  Usage:
-#    sudo bash setup_dev.sh                 # Install / update
-#    bash setup_dev.sh --check              # Read-only status report
-#    sudo bash setup_dev.sh --force-repos   # Force re-install of GPG keys
-#                                           # and APT source files
-# ─────────────────────────────────────────────────────────────
+#  Usage (run -h / --help for full details):
+#    sudo bash setup_pc.sh                 # Install / update everything
+#    bash      setup_pc.sh --check         # Read-only status report (no sudo)
+#    sudo bash setup_pc.sh --force-repos   # Re-install GPG keys & APT sources
+#    bash      setup_pc.sh -h              # Show help
+# =============================================================
 
 set -euo pipefail
 
@@ -33,6 +33,30 @@ ensure_bashrc_newline() {
     fi
 }
 
+# ── Usage / help ────────────────────────────────────────────────────────────
+usage() {
+    cat <<'EOF'
+setup_pc.sh — Dev machine setup for Ubuntu/Debian (and derivatives)
+
+USAGE
+    sudo bash setup_pc.sh [options]    Install / update everything
+    bash setup_pc.sh --check           Read-only status report (no sudo)
+
+OPTIONS
+    --check          Read-only status report; installs/changes nothing.
+    --force-repos    Re-install GPG keys and APT source files.
+    -h, --help       Show this help and exit.
+
+INSTALLS
+    curl, wget, git, xclip, htop, jq, tmux, bat, ripgrep, fzf, eza, Flatpak,
+    Chrome, VSCode, GitHub CLI, DBeaver, Beekeeper Studio, Docker, Python (pyenv),
+    Node (nvm + LTS), and configures ~/.bashrc.
+
+NOTES
+    Run with sudo to install; --check needs no sudo. Idempotent: safe to re-run.
+EOF
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 CHECK_MODE=false
 FORCE_REPOS=false
@@ -41,10 +65,7 @@ for arg in "$@"; do
     case "$arg" in
         --check)         CHECK_MODE=true ;;
         --force-repos)   FORCE_REPOS=true ;;
-        -h|--help)
-            grep -E '^#' "$0" | head -15
-            exit 0
-            ;;
+        -h|--help)       usage; exit 0 ;;
         *)
             error "Unknown argument: $arg"
             ;;

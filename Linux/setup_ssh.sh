@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================
-#  setup-git-ssh.sh -- Universal SSH key setup for Git hosts
+#  setup_ssh.sh -- Universal SSH key setup for Git hosts
 #
-#  Usage examples:
-#    ./setup-git-ssh.sh                                     # Interactive: asks for the host
-#    ./setup-git-ssh.sh --host github.com                   # GitHub
-#    ./setup-git-ssh.sh --config-only                       # Skips SSH, configures ONLY Git identity
-#    ./setup-git-ssh.sh --remove-all                        # Deletes all SSH keys from the system
+#  Usage (run -h / --help for full details):
+#    bash setup_ssh.sh                     # Interactive: asks for the host
+#    bash setup_ssh.sh --host github.com   # Specific host
+#    bash setup_ssh.sh --config-only       # Only set Git identity (no SSH)
+#    bash setup_ssh.sh --remove-all        # Delete all SSH keys
 # =============================================================
 
 set -u
@@ -15,10 +15,31 @@ GIT_HOST=""
 REMOVE_ALL=false
 CONFIG_ONLY=false
 
+# ── Usage / help ──────────────────────────────────────────────
+usage() {
+    cat <<'EOF'
+setup_ssh.sh — Universal SSH key setup for Git hosts
+
+USAGE
+    bash setup_ssh.sh [options]
+
+OPTIONS
+    --host <HOST>        Git host (e.g. github.com); omit for an interactive prompt.
+    --config-only, -C    Only set the Git identity (no SSH key).
+    --remove-all, -R     Delete all SSH keys from the system (asks confirmation).
+    -h, --help           Show this help and exit.
+
+WHAT IT DOES
+    Generates an SSH key per Git host, registers it in ~/.ssh/config, tests the
+    connection, and sets the Git identity (global or per-folder).
+EOF
+}
+
 # ── Parse Arguments ───────────────────────────────────────────
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --host|-h) GIT_HOST="$2"; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --host) GIT_HOST="$2"; shift ;;
         --remove-all|-R) REMOVE_ALL=true ;;
         --config-only|-C) CONFIG_ONLY=true ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;

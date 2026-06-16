@@ -8,12 +8,14 @@
 #    .\setup_pc.ps1 -Check           # Read-only status report
 #    .\setup_pc.ps1 -SkipDocker      # Install everything except Docker Desktop
 #    .\setup_pc.ps1 -SkipWSL         # Install everything except WSL2 + Ubuntu
+#    .\setup_pc.ps1 -h               # Show help (-Help / --help also work)
 # =============================================================
 
 param(
     [switch]$Check,
     [switch]$SkipDocker,
-    [switch]$SkipWSL
+    [switch]$SkipWSL,
+    [Alias('h')][switch]$Help
 )
 
 Set-StrictMode -Version Latest
@@ -24,6 +26,33 @@ $ErrorActionPreference = "Stop"
 # Pinned on purpose (not "latest 3"): a too-recent release can ship breaking API
 # changes or land before key packages support it. Bump this when you're ready.
 $PythonVersion = "3.13"
+
+# ── Help (-h / -Help / --help) ────────────────────────────────
+if ($Help) {
+    Write-Host @"
+setup_pc.ps1 - Windows dev-machine setup (winget-based)
+
+USAGE
+    .\setup_pc.ps1 [options]      Run from an ELEVATED PowerShell.
+
+OPTIONS
+    -Check          Read-only status report; changes nothing (no admin needed).
+    -SkipDocker     Skip Docker Desktop.
+    -SkipWSL        Skip WSL2 + Ubuntu.
+    -h, -Help       Show this help and exit. (--help also works.)
+
+INSTALLS
+    Git, jq, PowerShell 7, Windows Terminal, 7-Zip, Notepad++, bat, ripgrep, fzf,
+    eza, Chrome, VSCode, GitHub CLI, DBeaver, Beekeeper Studio, Node (nvm-windows
+    + LTS), Python (Python Install Manager, pinned $PythonVersion), WSL2 + Ubuntu,
+    Docker Desktop, smart PowerShell profile (5.1 + 7).
+
+NOTES
+    - Run as Administrator: machine-scope installs and WSL need it (-Check does not).
+    - Idempotent: re-running installs only what's missing and prints an honest summary.
+"@
+    exit 0
+}
 
 # ── Helpers ───────────────────────────────────────────────────
 function log     { param($m) Write-Host " [OK] $m" -ForegroundColor Green }

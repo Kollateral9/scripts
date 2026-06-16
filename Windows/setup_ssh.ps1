@@ -1,11 +1,11 @@
 # =============================================================
-#  setup-git-ssh.ps1 -- Universal SSH key setup for Git hosts
+#  setup_ssh.ps1 -- Universal SSH key setup for Git hosts
 #
-#  Usage examples:
-#    .\setup-git-ssh.ps1                                      # Interactive: asks for the host
-#    .\setup-git-ssh.ps1 -Host github.com                     # GitHub
-#    .\setup-git-ssh.ps1 -ConfigOnly                          # Skips SSH, configures ONLY Git identity (folder/global)
-#    .\setup-git-ssh.ps1 -RemoveAll                           # Deletes all SSH keys from the system
+#  Usage (run -h / -Help / --help for full details):
+#    .\setup_ssh.ps1                      # Interactive: asks for the host
+#    .\setup_ssh.ps1 -Host github.com     # Specific host
+#    .\setup_ssh.ps1 -ConfigOnly          # Only set Git identity (no SSH)
+#    .\setup_ssh.ps1 -RemoveAll           # Delete all SSH keys
 # =============================================================
 
 param(
@@ -13,11 +13,32 @@ param(
     [string]$GitHost = "",
 
     [switch]$RemoveAll,
-    [switch]$ConfigOnly
+    [switch]$ConfigOnly,
+    [Alias('h')][switch]$Help
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    Write-Host @"
+setup_ssh.ps1 - Universal SSH key setup for Git hosts
+
+USAGE
+    .\setup_ssh.ps1 [options]
+
+OPTIONS
+    -Host <HOST>     Git host (e.g. github.com); omit for an interactive prompt.
+    -ConfigOnly      Only set the Git identity (no SSH key).
+    -RemoveAll       Delete all SSH keys from the system (asks confirmation).
+    -h, -Help        Show this help and exit. (--help also works.)
+
+WHAT IT DOES
+    Generates an SSH key per Git host, registers it in ~/.ssh/config, tests the
+    connection, and sets the Git identity (global or per-folder).
+"@
+    exit 0
+}
 
 # ── Helpers ───────────────────────────────────────────────────
 function log   { param($m) Write-Host " [OK] $m" -ForegroundColor Green }
