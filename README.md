@@ -14,7 +14,7 @@ what is missing.
 | [Linux/setup_pc.sh](Linux/setup_pc.sh) | Ubuntu/Debian + derivatives | Installs a full dev toolchain (CLI tools, Chrome, VSCode, gh, Docker, pyenv, nvm, DB tools) and configures `.bashrc`. |
 | [Linux/setup_ssh.sh](Linux/setup_ssh.sh) | Linux/macOS | Generates an SSH key per Git host, registers it in `~/.ssh/config`, tests the connection, and sets the Git identity (global or per-folder). |
 | [Linux/forceGitName.sh](Linux/forceGitName.sh) | Git Bash / Linux | Rewrites author/committer name & email across the **entire** history of a repo (edit the values inside before use). |
-| [Windows/setup_pc.ps1](Windows/setup_pc.ps1) | Windows | winget-based equivalent of `setup_pc.sh` (+ WSL2/Docker Desktop, smart PowerShell profile with PSReadLine predictions + posh-git). |
+| [Windows/setup_pc.ps1](Windows/setup_pc.ps1) | Windows | winget-based dev setup: CLI tools, Chrome, VSCode, gh, DB tools, WSL2 + Docker Desktop, Node via nvm-windows, Python via the Python Install Manager, and a smart PowerShell profile (5.1 + PS7) with PSReadLine predictions + posh-git. Prints an honest end-of-run summary (installed / failed / skipped). |
 | [Windows/setup_ssh.ps1](Windows/setup_ssh.ps1) | Windows | PowerShell port of `setup_ssh.sh`. |
 | [Windows/WTContextMenu.ps1](Windows/WTContextMenu.ps1) | Windows | Adds an "Open in Windows Terminal Here" right-click entry (HKCU, no admin). |
 | [gp/oneFiler.py](gp/oneFiler.py) | any | Concatenates all text files of a project into a single `oneFile_project.txt` (e.g. to feed an LLM). |
@@ -55,17 +55,51 @@ Run from an **elevated** PowerShell:
 .\Windows\WTContextMenu.ps1            # add right-click entry (-Uninstall to remove)
 ```
 
-### Managing Node versions
+### Managing language runtimes (Node & Python)
 
-Both setups install Node through a version manager — `nvm` on Linux,
-`nvm-windows` on Windows — so you can keep multiple versions side by side
-instead of a single global install:
+Languages are handled by version managers, never as a single global install, so
+you can keep multiple versions side by side:
+
+- **Node** — `nvm` on Linux, `nvm-windows` on Windows
+- **Python** — `pyenv` on Linux, the Python Install Manager (`py`) on Windows (the
+  official Windows tool)
 
 ```bash
+# Node (nvm / nvm-windows)
 nvm install --lts    # latest LTS    (Windows: nvm install lts)
 nvm use 20           # switch the active version
-nvm ls               # list installed versions  (Windows: nvm list)
+nvm ls               # list installed  (Windows: nvm list)
 ```
+
+```powershell
+# Python on Windows (Python Install Manager)
+py install 3.13      # install a version  (setup pins 3.13 by default)
+py list              # list installed versions
+py -3.13             # run a specific version
+```
+
+On **Windows**, `setup_pc.ps1`:
+
+- installs **Node** via nvm-windows and, on first install, the latest LTS. It
+  first removes a pre-existing standalone Node (e.g. from the official `.msi`)
+  because a global Node and nvm fight over `C:\Program Files\nodejs` and the PATH.
+  `setup_pc.ps1 -Check` flags such a standalone Node up front.
+- installs **Python** via the Python Install Manager and adds the pinned version
+  (`$PythonVersion`, default `3.13`) only when no runtime exists yet. Change that
+  one variable near the top of the script to pick a different version.
+
+### Windows setup notes
+
+- **Run elevated.** Machine-scope installs and the WSL symlink need Administrator.
+- **WSL before Docker.** WSL2 is installed first (Docker Desktop depends on it); a
+  transient distro download failure falls back to installing just the WSL platform.
+- **Honest summary.** The run ends with a per-item OK / failed / skipped report
+  built from real outcomes — re-run to retry failures (winget can be flaky mid-run).
+- **`--exact` is case-sensitive** in winget, and a forced `--scope machine` is
+  retried without an explicit scope, so package ids must match winget exactly.
+- **PowerShell profile** is written for both Windows PowerShell 5.1 and
+  PowerShell 7; prediction options are version-guarded (plugin predictions need
+  7.2+) and wrapped so they never error in a redirected/non-interactive console.
 
 ### Python tools
 

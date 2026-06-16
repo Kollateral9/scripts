@@ -127,6 +127,15 @@ if $CHECK_MODE; then
         fi
     fi
 
+    # Informational only: a Node on PATH outside ~/.nvm (e.g. from apt/NodeSource).
+    # Unlike Windows, this does NOT conflict with nvm — nvm simply shadows it via
+    # PATH — so the installer never removes it; we just flag it here for parity.
+    SYS_NODE=$(command -v node 2>/dev/null || true)
+    case "${SYS_NODE:-}" in
+        ""|"$REAL_HOME/.nvm/"*) ;;  # none, or nvm-managed: nothing to report
+        *) warn "System Node.js outside nvm: $SYS_NODE (harmless — nvm shadows it; not removed by the installer)" ;;
+    esac
+
     section "Docker"
     check_cmd "Docker" "docker"
     if command -v docker &>/dev/null; then
