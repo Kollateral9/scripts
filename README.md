@@ -18,8 +18,7 @@ what is missing.
 | [Windows/setup_ssh.ps1](Windows/setup_ssh.ps1) | Windows | PowerShell port of `setup_ssh.sh`. |
 | [Windows/WTContextMenu.ps1](Windows/WTContextMenu.ps1) | Windows | Adds an "Open in Windows Terminal Here" right-click entry (HKCU, no admin). |
 | [gp/oneFiler.py](gp/oneFiler.py) | any | Concatenates all text files of a project into a single `oneFile_project.txt` (e.g. to feed an LLM). |
-| [gp/strip_repo.py](gp/strip_repo.py) | any | Cleans a repo of sensitive/heavy/generated files. Defaults to a **safe copy** next to the original. |
-| [gp/strip_verilog.py](gp/strip_verilog.py) | any | Removes HDL files (Verilog/SV/VHDL) and prunes empty dirs. (Subset of `strip_repo.py`'s `hdl` category.) |
+| [gp/strip_repo.py](gp/strip_repo.py) | any | Cleans a repo of sensitive/heavy/generated files (including HDL: Verilog/SV/VHDL via `--only hdl`). Defaults to a **safe copy** next to the original. |
 | [gp/update_changelog.py](gp/update_changelog.py) | any | Generates/updates `CHANGELOG.md` from git tags in the "Keep a Changelog" format. |
 
 ## Usage
@@ -56,6 +55,18 @@ Run from an **elevated** PowerShell:
 .\Windows\WTContextMenu.ps1            # add right-click entry (-Uninstall to remove)
 ```
 
+### Managing Node versions
+
+Both setups install Node through a version manager — `nvm` on Linux,
+`nvm-windows` on Windows — so you can keep multiple versions side by side
+instead of a single global install:
+
+```bash
+nvm install --lts    # latest LTS    (Windows: nvm install lts)
+nvm use 20           # switch the active version
+nvm ls               # list installed versions  (Windows: nvm list)
+```
+
 ### Python tools
 
 ```bash
@@ -66,6 +77,3 @@ python3 gp/strip_repo.py /path/to/repo --in-place   # destructive (double confir
 python3 gp/update_changelog.py                 # update CHANGELOG.md
 python3 gp/update_changelog.py --check         # exit 1 if tags are undocumented
 ```
-
-> ⚠️ `strip_verilog.py` deletes **in place** and has no safe-copy mode — prefer
-> `strip_repo.py --only hdl` for the same result without touching the original.
