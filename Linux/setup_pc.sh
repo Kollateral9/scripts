@@ -24,15 +24,6 @@ warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
 error()   { echo -e "${RED}[✘]${NC} $1"; exit 1; }
 section() { echo -e "\n${CYAN}${BOLD}▶ $1${NC}"; }
 
-# ── Helper: ensure .bashrc ends with a newline before appending ──
-ensure_bashrc_newline() {
-    local bashrc="$1"
-    [ -f "$bashrc" ] || return 0
-    if [ -n "$(tail -c 1 "$bashrc" 2>/dev/null)" ]; then
-        echo "" >> "$bashrc"
-    fi
-}
-
 # ── Usage / help ────────────────────────────────────────────────────────────
 usage() {
     cat <<'EOF'
@@ -102,11 +93,16 @@ if $CHECK_MODE; then
     }
 
     check_alias() {
-        local label="$1" pattern="$2"
-        if grep -q "$pattern" "$REAL_HOME/.bashrc" 2>/dev/null; then
-            log "$label: configured in .bashrc"
+        local label="$1" pattern="$2" found="" rc
+        for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc"; do
+            if [ -f "$rc" ] && grep -q "$pattern" "$rc" 2>/dev/null; then
+                found="$found $(basename "$rc")"
+            fi
+        done
+        if [ -n "$found" ]; then
+            log "$label: configured in$found"
         else
-            warn "$label: missing from .bashrc"
+            warn "$label: missing from shell rc"
         fi
     }
 
@@ -266,8 +262,33 @@ if $FORCE_REPOS; then
     warn "--force-repos is set: GPG keys and APT source files will be re-installed."
 fi
 
-append_bashrc() {
-    echo "$1" >> "$REAL_HOME/.bashrc"
+# ── Shell rc files to configure (bash always; zsh when present) ──
+# Aliases/inits are written to every target shell, so `update`, ls/bat/tree,
+# pyenv and nvm work under zsh too -- not just bash (zsh reads ~/.zshrc, never
+# ~/.bashrc).
+SHELL_RCS=("$REAL_HOME/.bashrc")
+if command -v zsh >/dev/null 2>&1 || [ -f "$REAL_HOME/.zshrc" ]; then
+    SHELL_RCS+=("$REAL_HOME/.zshrc")
+fi
+
+# add_shell_block <marker>: append stdin to every target rc file that doesn't
+# already contain <marker> (idempotent), keeping bash and zsh in sync from a
+# single definition. Block content is taken literally (no expansion).
+add_shell_block() {
+    local marker="$1" block rc
+    block="$(cat)"
+    for rc in "${SHELL_RCS[@]}"; do
+        [ -e "$rc" ] || : > "$rc"
+        if grep -qF -- "$marker" "$rc" 2>/dev/null; then
+            warn "$(basename "$rc"): '$marker' already present, skipped."
+        else
+            if [ -s "$rc" ] && [ -n "$(tail -c1 "$rc" 2>/dev/null)" ]; then
+                echo "" >> "$rc"
+            fi
+            printf '%s\n' "$block" >> "$rc"
+            log "$(basename "$rc"): '$marker' added."
+        fi
+    done
 }
 
 pkg_installed() {
@@ -345,17 +366,10 @@ apt autoremove -y
 apt autoclean
 log "System updated."
 
-ensure_bashrc_newline "$REAL_HOME/.bashrc"
-
-UPDATE_ALIAS="alias update='sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y && sudo apt autoclean && flatpak update -y'"
-if ! grep -q "alias update=" "$REAL_HOME/.bashrc" 2>/dev/null; then
-    append_bashrc ""
-    append_bashrc "# System update alias"
-    append_bashrc "$UPDATE_ALIAS"
-    log "Alias 'update' added to ~/.bashrc."
-else
-    warn "Alias 'update' already in ~/.bashrc, skipped."
-fi
+add_shell_block "alias update=" <<'EOF'
+# System update alias
+alias update='sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y && sudo apt autoclean && flatpak update -y'
+EOF
 
 # ── 2. Base dependencies ─────────────────────────────────────────────────────
 section "Base dependencies"
@@ -383,12 +397,10 @@ fi
 if command -v bat &>/dev/null; then
     log "bat available as 'bat', no alias needed."
 elif command -v batcat &>/dev/null; then
-    if ! grep -q "alias bat=" "$REAL_HOME/.bashrc" 2>/dev/null; then
-        append_bashrc ""
-        append_bashrc "# bat (installed as batcat on older Ubuntu/Debian)"
-        append_bashrc "alias bat='batcat'"
-        log "Alias 'bat' -> 'batcat' added to ~/.bashrc."
-    fi
+    add_shell_block "alias bat=" <<'EOF'
+# bat (installed as batcat on older Ubuntu/Debian)
+alias bat='batcat'
+EOF
 else
     warn "Neither 'bat' nor 'batcat' found after install — check apt logs."
 fi
@@ -417,14 +429,12 @@ else
     warn "eza already installed, skipped."
 fi
 
-if ! grep -q "# eza as ls replacement" "$REAL_HOME/.bashrc" 2>/dev/null; then
-    append_bashrc ""
-    append_bashrc "# eza as ls replacement"
-    append_bashrc "alias ls='eza --icons'"
-    append_bashrc "alias ll='eza --icons -lah'"
-    append_bashrc "alias tree='eza --icons --tree'"
-    log "Aliases ls/ll/tree -> eza added to ~/.bashrc."
-fi
+add_shell_block "# eza as ls replacement" <<'EOF'
+# eza as ls replacement
+alias ls='eza --icons'
+alias ll='eza --icons -lah'
+alias tree='eza --icons --tree'
+EOF
 
 # ── 4. Google Chrome ──────────────────────────────────────────────────────────
 section "Google Chrome"
@@ -534,18 +544,13 @@ else
     fi
 fi
 
-if ! grep -q "pyenv init" "$REAL_HOME/.bashrc"; then
-    ensure_bashrc_newline "$REAL_HOME/.bashrc"
-    cat >> "$REAL_HOME/.bashrc" << 'EOF'
-
+add_shell_block "pyenv init" <<'EOF'
 # pyenv
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 eval "$(pyenv virtualenv-init -)"
 EOF
-    log "pyenv added to ~/.bashrc."
-fi
 
 # ── 8. nvm + Node.js LTS ──────────────────────────────────────────────────────
 section "nvm + Node.js LTS"
@@ -567,16 +572,13 @@ else
     INSTALL_NODE=false
 fi
 
-if ! grep -q "NVM_DIR" "$REAL_HOME/.bashrc"; then
-    ensure_bashrc_newline "$REAL_HOME/.bashrc"
-    cat >> "$REAL_HOME/.bashrc" << 'EOF'
-
+add_shell_block "NVM_DIR" <<'EOF'
 # nvm
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+# nvm's bash_completion is bash-only; guard it so it doesn't error under zsh.
+[ -n "$BASH_VERSION" ] && [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 EOF
-fi
 
 if $INSTALL_NODE; then
     sudo -u "$REAL_USER" HOME="$REAL_HOME" bash -c \
@@ -709,9 +711,11 @@ else
     log "Git configured: \"$GIT_USERNAME\" <$GIT_EMAIL>"
 fi
 
-# ── 13. Fix .bashrc ownership ────────────────────────────────────────────────
-chown "$REAL_USER:$REAL_GROUP" "$REAL_HOME/.bashrc"
-log ".bashrc ownership restored for $REAL_USER:$REAL_GROUP."
+# ── 13. Fix shell rc ownership ───────────────────────────────────────────────
+for rc in "${SHELL_RCS[@]}"; do
+    [ -f "$rc" ] && chown "$REAL_USER:$REAL_GROUP" "$rc"
+done
+log "Shell rc ownership restored for $REAL_USER:$REAL_GROUP."
 
 # ── 14. Summary ───────────────────────────────────────────────────────────────
 echo ""
@@ -731,8 +735,8 @@ echo -e "  ${GREEN}✔${NC} Docker + Docker Compose"
 echo -e "  ${GREEN}✔${NC} DBeaver (APT repo) + Beekeeper Studio"
 echo -e "  ${GREEN}✔${NC} Git configured"
 echo ""
-echo -e "${YELLOW}  ⚠ Restart your terminal (or run 'source ~/.bashrc') to activate:${NC}"
-echo -e "     • aliases: update, bat, ls/ll/tree"
+echo -e "${YELLOW}  ⚠ Restart your terminal (or re-source your shell rc: ~/.bashrc or ~/.zshrc) to activate:${NC}"
+echo -e "     • aliases: update, bat, ls/ll/tree (now in bash AND zsh)"
 echo -e "     • pyenv"
 echo -e "     • nvm"
 echo -e "     • docker without sudo"
