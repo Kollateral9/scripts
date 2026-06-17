@@ -89,12 +89,47 @@ function Test-WingetAvailable {
 }
 
 # ── Check if a winget package is already installed ────────────
-# winget list --id <Id> returns exit 0 even if nothing matches,
-# so we grep the output for the id itself.
+# winget list --id <Id> returns exit 0 even if nothing matches, so we inspect the
+# output for the id. Two traps we have to dodge:
+#   1) On a narrow / non-interactive console winget TRUNCATES columns ("Google.Chr…"),
+#      so a substring match on the full id misses and the package looks absent.
+#   2) winget interleaves spinner frames and blank lines into stdout.
+# We therefore scan line by line and accept either the exact id token OR a truncated
+# prefix of it ending in winget's ellipsis (…), bounded so "Google.Chrome" can't
+# match a longer unrelated id.
 function Test-WingetInstalled {
     param([string]$PackageId)
     $output = winget list --id $PackageId --exact --accept-source-agreements 2>$null | Out-String
-    return ($output -match [regex]::Escape($PackageId))
+    $idEsc  = [regex]::Escape($PackageId)
+    foreach ($line in ($output -split "`r?`n")) {
+        # exact id as its own token (not a substring of a longer id)
+        if ($line -match "(?<![\w\.])$idEsc(?![\w])") { return $true }
+        # truncated id column: a prefix of the id followed by winget's ellipsis
+        if ($line -match '(\S+?)…') {
+            $prefix = $matches[1]
+            if ($prefix.Length -ge 4 -and $PackageId.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+# ── Check if an app is registered in Windows "Add/Remove Programs" ──
+# Fallback for GUI apps (Chrome, VS Code, ...) that may have been installed OUTSIDE
+# winget (official .exe, OEM preload) — winget list won't know about those. Matches
+# DisplayName across the machine (32/64-bit) and per-user uninstall hives.
+function Test-AppInstalled {
+    param([Parameter(Mandatory)][string]$DisplayName)
+    $keys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $hit = Get-ItemProperty $keys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like "*$DisplayName*" } |
+        Select-Object -First 1
+    return [bool]$hit
 }
 
 # ── Install a winget package idempotently ─────────────────────
@@ -103,14 +138,23 @@ function Install-WingetPackage {
         [Parameter(Mandatory)][string]$Id,
         [string]$Label = $Id,
         [string]$Scope = "machine",
-        [string]$CommandName   # optional CLI command that proves it's already present
+        [string]$CommandName,  # optional CLI command that proves it's already present
+        [string]$DisplayName   # optional Add/Remove-Programs name for GUI apps (Chrome, ...)
     )
-    # Detect existing installs two ways: a CLI command on PATH (catches tools
-    # installed outside winget, e.g. a Git installed from the official .exe) and
-    # winget's own list. Without the command check, winget reinstalls a tool it
-    # didn't itself install.
+    # Detect existing installs three ways so winget never reinstalls something that
+    # is already there:
+    #   - a CLI command on PATH (catches tools installed outside winget, e.g. a Git
+    #     from the official .exe),
+    #   - the Windows uninstall registry by DisplayName (catches GUI apps installed
+    #     outside winget, e.g. Chrome from Google's own installer or an OEM preload),
+    #   - winget's own list.
     if ($CommandName -and (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
         warn "${Label}: already present ('$CommandName' on PATH), skipped."
+        Add-Result $Label "ok" "already present"
+        return $false
+    }
+    if ($DisplayName -and (Test-AppInstalled -DisplayName $DisplayName)) {
+        warn "${Label}: already present ('$DisplayName' in installed programs), skipped."
         Add-Result $Label "ok" "already present"
         return $false
     }
@@ -486,8 +530,10 @@ Update-EnvPath
 
 # ── 5. Browsers & editors ─────────────────────────────────────
 section "Browsers & editors"
-Install-WingetPackage -Id "Google.Chrome"                 -Label "Google Chrome"       | Out-Null
-Install-WingetPackage -Id "Microsoft.VisualStudioCode"    -Label "Visual Studio Code"  | Out-Null
+# -DisplayName lets us detect a Chrome / VS Code that was installed outside winget
+# (Google's own .exe, OEM preload) and avoid a needless reinstall.
+Install-WingetPackage -Id "Google.Chrome"              -Label "Google Chrome"      -DisplayName "Google Chrome"      | Out-Null
+Install-WingetPackage -Id "Microsoft.VisualStudioCode" -Label "Visual Studio Code" -DisplayName "Microsoft Visual Studio Code" | Out-Null
 
 # ── 6. GitHub CLI ─────────────────────────────────────────────
 section "GitHub CLI"
